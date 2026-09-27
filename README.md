@@ -44,7 +44,7 @@ RLS 用 pgTAP，需要本机 Docker：
 supabase test db
 ```
 
-测试在事务里创建两个用户，确认用户 B 读不到用户 A 的 bubbles，并在结束时回滚。
+测试在事务里创建两个用户，确认用户 B 读不到、改不了、删不了用户 A 的行，也不能把子表挂到用户 A 的父行上，并在结束时回滚。GitHub Actions 的 `db` job 会在带 Docker 的 runner 上执行 `supabase start && supabase db reset && supabase test db`。
 
 ## 目录
 
@@ -81,16 +81,19 @@ supabase/tests      pgTAP RLS 测试
 
 想法和习惯都是私密数据。表全部开启 RLS，按 `user_id` 隔离。`categories` 以及 `user_id` 为空的预设习惯对已登录用户只读。
 
-打日志用 `logEvent`（`src/lib/privacy/log.ts`）。它会把 `content`、`text`、`idea`、`note`、`title`、`reason_text`、`body`、`prompt` 换成 `[redacted]`。不要 `console.log` 想法原文。
+打日志只用 `logEvent`（`src/lib/privacy/log.ts`）。它按白名单留下 id、计数、耗时和少量枚举，其它字段直接丢掉。ESLint 禁止 `console`，只有 `logEvent` 内部例外。
 
 ## 设计取舍
 
 - Next.js 16 把 Middleware 改名为 Proxy，所以会话刷新和路由保护写在 `src/proxy.ts`，行为与以前的 middleware 相同。
 - 枚举用 `text` + `CHECK`，没有建 Postgres enum，后面改值只要改约束。TypeScript 联合类型在 `src/lib/db/enums.ts`。
-- `judge_results`、`links`、`feed_items`、`goal_nodes` 额外存了 `user_id`，RLS 可以直接比较，不必 join。
-- 类别是全局预设，没有 `user_id`。预设习惯 `source = 'preset'` 且 `user_id` 为空；用户自己的习惯必须带 `user_id`。
+- `judge_results`、`links`、`feed_items`、`goal_nodes` 额外存了 `user_id`。父表有 `unique (id, user_id)`，子表用复合外键，避免外键检查绕过 RLS 之后挂到别人的父行上。
+- 类别是全局预设，没有 `user_id`。预设习惯是共享模板（`user_id` 为空、`source = 'preset'`），只读。新手引导选中时复制一份：`source = 'preset'` 且 `user_id` 有值，`template_id` 指向模板。暂停、周期和大小改在副本上。
+- `bubbles.category_status` 默认 `unjudged`。`pending` 只表示判定过但还要用户确认。
 - `(user_id, idempotency_key)` 是部分唯一索引，只在 key 非空时生效，避免没有 key 的网页捕捉互相冲突。
 - 向量索引用 HNSW cosine，对应 PRD 里 0.85 的相似度阈值。维度 1536。
-- `goal_nodes.status` 用 `open` / `done` / `dismissed`。`goal_trees.mode` 用 `concrete` / `bigger`。
-- API 令牌只存小写 SHA-256 十六进制哈希，scope 目前只允许 `bubbles:write`。
-- 类型文件是按迁移手写的。本地库起来之后可以用 `supabase gen types typescript --local --schema public` 覆盖 `src/lib/db/database.types.ts`。
+- `goal_nodes.status` 用 `suggested` / `accepted` / `done` / `dismissed`。`goal_trees.mode` 用 `concrete` / `bigger` / `micro`。想法和方案的关系在 `goal_tree_bubbles`，可以按气泡反查。
+- 完成记录和 feed 条目引用习惯、行动时用 `ON DELETE RESTRICT`，不级联删掉历史。
+- API 令牌只存小写 SHA-256 十六进制哈希，scope 目前只允许 `bubbles:write`。已登录用户只能 select，创建和吊销走服务端。
+- `anon` 对 public 表没有 insert / update / delete。
+- 类型文件按迁移手写，和 schema 对齐。本地库起来之后用 `supabase gen types typescript --local --schema public` 覆盖 `src/lib/db/database.types.ts`。

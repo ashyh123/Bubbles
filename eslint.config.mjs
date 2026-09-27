@@ -15,6 +15,17 @@ const eslintConfig = defineConfig([
     'coverage/**',
     'supabase/.temp/**',
   ]),
+  {
+    rules: {
+      'no-console': 'error',
+    },
+  },
+  {
+    files: ['src/lib/privacy/log.ts', 'src/**/*.test.ts'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
 ]);
 
 export default eslintConfig;

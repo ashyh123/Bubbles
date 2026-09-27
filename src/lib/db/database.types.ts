@@ -1,4 +1,7 @@
 import type {
+  BreakdownError,
+  BreakdownReason,
+  BreakdownStatus,
   BubbleSource,
   CategoryKey,
   CategoryStatus,
@@ -39,6 +42,7 @@ export type Database = {
           judge_confidence_min: number;
           prefs: Json;
           onboarded_at: string | null;
+          feed_max_items: number;
           created_at: string;
           updated_at: string;
         },
@@ -48,6 +52,7 @@ export type Database = {
           judge_confidence_min?: number;
           prefs?: Json;
           onboarded_at?: string | null;
+          feed_max_items?: number;
           created_at?: string;
           updated_at?: string;
         },
@@ -57,6 +62,7 @@ export type Database = {
           judge_confidence_min?: number;
           prefs?: Json;
           onboarded_at?: string | null;
+          feed_max_items?: number;
           created_at?: string;
           updated_at?: string;
         }
@@ -104,6 +110,12 @@ export type Database = {
           embedding_model: string | null;
           source: BubbleSource;
           idempotency_key: string | null;
+          breakdown_status: BreakdownStatus;
+          breakdown_reason: BreakdownReason | null;
+          breakdown_error: BreakdownError | null;
+          breakdown_generation_count: number;
+          manual_retry_count: number;
+          manual_retry_on: string | null;
           created_at: string;
           updated_at: string;
         },
@@ -117,6 +129,12 @@ export type Database = {
           embedding_model?: string | null;
           source?: BubbleSource;
           idempotency_key?: string | null;
+          breakdown_status?: BreakdownStatus;
+          breakdown_reason?: BreakdownReason | null;
+          breakdown_error?: BreakdownError | null;
+          breakdown_generation_count?: number;
+          manual_retry_count?: number;
+          manual_retry_on?: string | null;
           created_at?: string;
           updated_at?: string;
         },
@@ -130,6 +148,12 @@ export type Database = {
           embedding_model?: string | null;
           source?: BubbleSource;
           idempotency_key?: string | null;
+          breakdown_status?: BreakdownStatus;
+          breakdown_reason?: BreakdownReason | null;
+          breakdown_error?: BreakdownError | null;
+          breakdown_generation_count?: number;
+          manual_retry_count?: number;
+          manual_retry_on?: string | null;
           created_at?: string;
           updated_at?: string;
         }
@@ -144,7 +168,7 @@ export type Database = {
           question_key: string;
           answer: string;
           probabilities: Json;
-          confidence: number;
+          confidence: number | null;
           latency_ms: number;
           cost_usd: number | null;
           final: boolean;
@@ -161,7 +185,7 @@ export type Database = {
           question_key: string;
           answer: string;
           probabilities?: Json;
-          confidence: number;
+          confidence?: number | null;
           latency_ms: number;
           cost_usd?: number | null;
           final?: boolean;
@@ -178,7 +202,7 @@ export type Database = {
           question_key?: string;
           answer?: string;
           probabilities?: Json;
-          confidence?: number;
+          confidence?: number | null;
           latency_ms?: number;
           cost_usd?: number | null;
           final?: boolean;
@@ -229,6 +253,7 @@ export type Database = {
           est_minutes: number;
           interval_days: number;
           source: HabitSource;
+          template_id: string | null;
           goal_node_id: string | null;
           status: HabitStatus;
           created_at: string;
@@ -243,6 +268,7 @@ export type Database = {
           est_minutes: number;
           interval_days: number;
           source: HabitSource;
+          template_id?: string | null;
           goal_node_id?: string | null;
           status?: HabitStatus;
           created_at?: string;
@@ -257,6 +283,7 @@ export type Database = {
           est_minutes?: number;
           interval_days?: number;
           source?: HabitSource;
+          template_id?: string | null;
           goal_node_id?: string | null;
           status?: HabitStatus;
           created_at?: string;
@@ -405,7 +432,6 @@ export type Database = {
           id: string;
           user_id: string;
           mode: GoalMode;
-          source_bubble_ids: string[];
           constraints: Json;
           model: string | null;
           created_at: string;
@@ -415,7 +441,6 @@ export type Database = {
           id?: string;
           user_id: string;
           mode: GoalMode;
-          source_bubble_ids?: string[];
           constraints?: Json;
           model?: string | null;
           created_at?: string;
@@ -425,9 +450,31 @@ export type Database = {
           id?: string;
           user_id?: string;
           mode?: GoalMode;
-          source_bubble_ids?: string[];
           constraints?: Json;
           model?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        }
+      >;
+      goal_tree_bubbles: TableDef<
+        {
+          tree_id: string;
+          bubble_id: string;
+          user_id: string;
+          created_at: string;
+          updated_at: string;
+        },
+        {
+          tree_id: string;
+          bubble_id: string;
+          user_id: string;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          tree_id?: string;
+          bubble_id?: string;
+          user_id?: string;
           created_at?: string;
           updated_at?: string;
         }
@@ -445,6 +492,12 @@ export type Database = {
           interval_days: number | null;
           status: GoalNodeStatus;
           habit_id: string | null;
+          done_definition: string | null;
+          accepted_at: string | null;
+          pinned: boolean;
+          position: number;
+          category_id: string | null;
+          specificity_score: number | null;
           created_at: string;
           updated_at: string;
         },
@@ -460,6 +513,12 @@ export type Database = {
           interval_days?: number | null;
           status?: GoalNodeStatus;
           habit_id?: string | null;
+          done_definition?: string | null;
+          accepted_at?: string | null;
+          pinned?: boolean;
+          position?: number;
+          category_id?: string | null;
+          specificity_score?: number | null;
           created_at?: string;
           updated_at?: string;
         },
@@ -475,6 +534,12 @@ export type Database = {
           interval_days?: number | null;
           status?: GoalNodeStatus;
           habit_id?: string | null;
+          done_definition?: string | null;
+          accepted_at?: string | null;
+          pinned?: boolean;
+          position?: number;
+          category_id?: string | null;
+          specificity_score?: number | null;
           created_at?: string;
           updated_at?: string;
         }

@@ -4,19 +4,21 @@ import { logEvent, redactForLog } from '@/lib/privacy/log';
 const PRIVATE_IDEA = '想每天早上背10个单词';
 
 describe('redactForLog', () => {
-  it('replaces private text fields and keeps identifiers', () => {
+  it('keeps ids, counts, latency, and enums, and drops everything else', () => {
     expect(
       redactForLog({
         bubbleId: 'bubble_1',
         content: PRIVATE_IDEA,
+        count: 2,
+        latency_ms: 40,
+        source: 'shortcut',
         nested: { text: 'secret note', source: 'web' },
-        items: [{ title: '睡前拉伸' }],
       }),
     ).toEqual({
       bubbleId: 'bubble_1',
-      content: '[redacted]',
-      nested: { text: '[redacted]', source: 'web' },
-      items: [{ title: '[redacted]' }],
+      count: 2,
+      latency_ms: 40,
+      source: 'shortcut',
     });
   });
 });
@@ -31,6 +33,9 @@ describe('logEvent', () => {
     logEvent('bubble.created', {
       bubbleId: 'bubble_1',
       content: PRIVATE_IDEA,
+      count: 1,
+      latency_ms: 12,
+      source: 'web',
       meta: { idea: 'another private line' },
     });
 
@@ -38,8 +43,11 @@ describe('logEvent', () => {
     expect(typeof line).toBe('string');
     expect(line).not.toContain(PRIVATE_IDEA);
     expect(line).not.toContain('another private line');
+    expect(line).not.toContain('content');
     expect(line).toContain('bubble.created');
     expect(line).toContain('bubble_1');
-    expect(line).toContain('[redacted]');
+    expect(line).toContain('"count":1');
+    expect(line).toContain('"latency_ms":12');
+    expect(line).toContain('"source":"web"');
   });
 });

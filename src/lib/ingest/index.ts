@@ -10,6 +10,7 @@ export interface IngestRequest {
   text: string;
   source: IngestSource;
   occurred_at?: string;
+  idempotency_key?: string;
   meta?: Record<string, unknown>;
 }
 
@@ -21,7 +22,7 @@ export interface IngestAccepted {
 const BUBBLE_SOURCE_BY_INGEST: Record<IngestSource, BubbleSource> = {
   web: 'web',
   shortcut: 'shortcut',
-  assistant: 'api',
+  assistant: 'assistant',
   mcp: 'mcp',
 };
 

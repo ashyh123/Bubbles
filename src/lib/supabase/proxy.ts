@@ -1,14 +1,26 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
-import { isProtectedPath } from '@/lib/auth/routes';
 import { safeNextPath } from '@/lib/auth/redirect';
+import { isProtectedPath } from '@/lib/auth/routes';
 import { readPublicSupabaseEnv } from '@/lib/env';
 
-function redirectToLogin(request: NextRequest) {
+export function withSessionCookies(redirect: NextResponse, session: NextResponse): NextResponse {
+  for (const cookie of session.headers.getSetCookie()) {
+    redirect.headers.append('set-cookie', cookie);
+  }
+  return redirect;
+}
+
+function redirectToLogin(request: NextRequest, sessionResponse: NextResponse) {
   const redirectUrl = request.nextUrl.clone();
+  const next = safeNextPath(
+    `${request.nextUrl.pathname}${request.nextUrl.search}${request.nextUrl.hash}`,
+  );
   redirectUrl.pathname = '/login';
-  redirectUrl.searchParams.set('next', safeNextPath(request.nextUrl.pathname));
-  return NextResponse.redirect(redirectUrl);
+  redirectUrl.search = '';
+  redirectUrl.hash = '';
+  redirectUrl.searchParams.set('next', next);
+  return withSessionCookies(NextResponse.redirect(redirectUrl), sessionResponse);
 }
 
 export async function updateSession(request: NextRequest) {
@@ -20,7 +32,7 @@ export async function updateSession(request: NextRequest) {
     ({ url, anonKey } = readPublicSupabaseEnv());
   } catch {
     return isProtectedPath(request.nextUrl.pathname)
-      ? redirectToLogin(request)
+      ? redirectToLogin(request, supabaseResponse)
       : supabaseResponse;
   }
 
@@ -45,12 +57,12 @@ export async function updateSession(request: NextRequest) {
     // Refresh the session. Do not run other logic between client creation and getUser.
     const { data } = await supabase.auth.getUser();
     if (!data.user && isProtectedPath(request.nextUrl.pathname)) {
-      return redirectToLogin(request);
+      return redirectToLogin(request, supabaseResponse);
     }
   } catch {
     // Auth failures can include tokens. Do not log them. Protected pages still require a session.
     if (isProtectedPath(request.nextUrl.pathname)) {
-      return redirectToLogin(request);
+      return redirectToLogin(request, supabaseResponse);
     }
   }
 
