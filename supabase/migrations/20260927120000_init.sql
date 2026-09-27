@@ -724,11 +724,13 @@ grant update (
 -- Judge rows are inserted by the service role. Clients may only read their own.
 revoke insert, update, delete on table public.judge_results from authenticated;
 
--- Tables created later by postgres or supabase_admin should not become
--- writable by anon. Existing tables are covered by the revoke above.
+-- Tables created later by the migration role, or by postgres, should not be
+-- writable by anon. Changing supabase_admin's default privileges is denied
+-- inside a migration (42501), and that role is who Supabase uses to grant
+-- anon by default. Every new migration must still revoke insert, update,
+-- and delete on public tables from anon. The pgTAP suite checks that.
 alter default privileges in schema public revoke insert, update, delete on tables from anon;
 alter default privileges for role postgres in schema public revoke insert, update, delete on tables from anon;
-alter default privileges for role supabase_admin in schema public revoke insert, update, delete on tables from anon;
 
 create trigger on_auth_user_created
   after insert on auth.users

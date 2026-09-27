@@ -97,6 +97,6 @@ supabase/tests      pgTAP RLS 测试
 - 拆解状态和重试计数只能由服务端更新。已登录用户可以改想法正文、分类和来源，不能改 `breakdown_status`、`breakdown_error`、`breakdown_generation_count`、`manual_retry_count`、`manual_retry_on`。
 - `judge_results` 对已登录用户只有 select，写入走 service role。
 - API 令牌只存小写 SHA-256 十六进制哈希，scope 目前只允许 `bubbles:write`。已登录用户只能 select，创建和吊销走服务端。
-- `anon` 对现有 public 表没有写权限。迁移末尾还收回了 `postgres` 和 `supabase_admin` 在 public 上的默认 insert / update / delete，避免以后新建的表再授给 anon。新迁移如果改了授权，仍要对 anon 再 revoke 一次。
+- `anon` 对现有 public 表没有写权限。迁移末尾收回了当前角色和 `postgres` 的默认 insert / update / delete。`supabase_admin` 的默认权限在迁移里改不了（42501），而 Supabase 就是用这个角色把写权限授给 anon 的。所以每个新迁移都要再对 anon revoke 一次。pgTAP 会检查 public 下每张表 anon 都没有写权限。
 - `anon` 对 public 表没有 insert / update / delete。
 - 类型文件按迁移手写，和 schema 对齐。本地库起来之后用 `supabase gen types typescript --local --schema public` 覆盖 `src/lib/db/database.types.ts`。
