@@ -93,7 +93,10 @@ supabase/tests      pgTAP RLS 测试
 - `(user_id, idempotency_key)` 是部分唯一索引，只在 key 非空时生效，避免没有 key 的网页捕捉互相冲突。
 - 向量索引用 HNSW cosine，对应 PRD 里 0.85 的相似度阈值。维度 1536。
 - `goal_nodes.status` 用 `suggested` / `accepted` / `done` / `dismissed`。`goal_trees.mode` 用 `concrete` / `bigger` / `micro`。想法和方案的关系在 `goal_tree_bubbles`，可以按气泡反查。
-- 完成记录和 feed 条目引用习惯、行动时用 `ON DELETE RESTRICT`，不级联删掉历史。
+- 完成记录和 feed 条目引用习惯、行动时用 `ON DELETE RESTRICT`，不级联删掉历史。习惯和行动互相引用时用 `on delete set null (goal_node_id)` / `on delete set null (habit_id)`，只清空关联列，`user_id` 保持不变。
+- 拆解状态和重试计数只能由服务端更新。已登录用户可以改想法正文、分类和来源，不能改 `breakdown_status`、`breakdown_error`、`breakdown_generation_count`、`manual_retry_count`、`manual_retry_on`。
+- `judge_results` 对已登录用户只有 select，写入走 service role。
 - API 令牌只存小写 SHA-256 十六进制哈希，scope 目前只允许 `bubbles:write`。已登录用户只能 select，创建和吊销走服务端。
+- `anon` 对现有 public 表没有写权限。迁移末尾还收回了 `postgres` 和 `supabase_admin` 在 public 上的默认 insert / update / delete，避免以后新建的表再授给 anon。新迁移如果改了授权，仍要对 anon 再 revoke 一次。
 - `anon` 对 public 表没有 insert / update / delete。
 - 类型文件按迁移手写，和 schema 对齐。本地库起来之后用 `supabase gen types typescript --local --schema public` 覆盖 `src/lib/db/database.types.ts`。

@@ -18,5 +18,10 @@ describe('safeNextPath', () => {
     expect(safeNextPath('/%0a/evil.example')).toBe('/');
     expect(safeNextPath('/%0d/evil.example')).toBe('/');
     expect(safeNextPath('/%0A/evil.example')).toBe('/');
+    expect(safeNextPath('/.//evil.example')).toBe('/');
+    expect(safeNextPath('/..//evil.example')).toBe('/');
+    expect(safeNextPath('/%2e//evil.example')).toBe('/');
+    expect(safeNextPath('/%2e%2e//x')).toBe('/');
+    expect(safeNextPath('/./\\x')).toBe('/');
   });
 });

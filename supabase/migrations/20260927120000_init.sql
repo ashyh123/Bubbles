@@ -505,13 +505,17 @@ create index goal_nodes_user_id_idx on public.goal_nodes (user_id);
 create index goal_nodes_parent_id_idx on public.goal_nodes (parent_id);
 create index goal_nodes_category_id_idx on public.goal_nodes (category_id);
 
+-- Column lists keep user_id. ON DELETE SET NULL without a column list would
+-- null both key columns and then fail the owner check or the NOT NULL.
 alter table public.habits
   add constraint habits_goal_node_user_fkey
-  foreign key (goal_node_id, user_id) references public.goal_nodes (id, user_id) on delete set null;
+  foreign key (goal_node_id, user_id) references public.goal_nodes (id, user_id)
+  on delete set null (goal_node_id);
 
 alter table public.goal_nodes
   add constraint goal_nodes_habit_user_fkey
-  foreign key (habit_id, user_id) references public.habits (id, user_id) on delete set null;
+  foreign key (habit_id, user_id) references public.habits (id, user_id)
+  on delete set null (habit_id);
 
 alter table public.feed_items
   add constraint feed_items_goal_node_user_fkey
@@ -642,9 +646,6 @@ create policy bubbles_update_own on public.bubbles for update to authenticated u
 create policy bubbles_delete_own on public.bubbles for delete to authenticated using (user_id = (select auth.uid()));
 
 create policy judge_results_select_own on public.judge_results for select to authenticated using (user_id = (select auth.uid()));
-create policy judge_results_insert_own on public.judge_results for insert to authenticated with check (user_id = (select auth.uid()));
-create policy judge_results_update_own on public.judge_results for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
-create policy judge_results_delete_own on public.judge_results for delete to authenticated using (user_id = (select auth.uid()));
 
 create policy links_select_own on public.links for select to authenticated using (user_id = (select auth.uid()));
 create policy links_insert_own on public.links for insert to authenticated with check (user_id = (select auth.uid()));
@@ -705,6 +706,29 @@ grant usage, select on all sequences in schema public to anon, authenticated, se
 
 revoke insert, update, delete on all tables in schema public from anon;
 revoke insert, update, delete on table public.api_tokens from authenticated;
+
+-- Breakdown counters and status are written by the server. Users can still
+-- edit the idea, its category, and the other capture fields.
+revoke update on table public.bubbles from authenticated;
+grant update (
+  content,
+  category_id,
+  category_status,
+  embedding,
+  embedding_model,
+  source,
+  idempotency_key,
+  breakdown_reason
+) on table public.bubbles to authenticated;
+
+-- Judge rows are inserted by the service role. Clients may only read their own.
+revoke insert, update, delete on table public.judge_results from authenticated;
+
+-- Tables created later by postgres or supabase_admin should not become
+-- writable by anon. Existing tables are covered by the revoke above.
+alter default privileges in schema public revoke insert, update, delete on tables from anon;
+alter default privileges for role postgres in schema public revoke insert, update, delete on tables from anon;
+alter default privileges for role supabase_admin in schema public revoke insert, update, delete on tables from anon;
 
 create trigger on_auth_user_created
   after insert on auth.users

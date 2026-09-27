@@ -6,7 +6,7 @@ create extension if not exists pgtap with schema extensions;
 
 set search_path = public, extensions, auth;
 
-select plan(106);
+select plan(135);
 
 insert into auth.users (
   instance_id,
@@ -177,6 +177,61 @@ select ok(
   not has_table_privilege('authenticated', 'public.api_tokens', 'DELETE'),
   'authenticated cannot delete api tokens'
 );
+select ok(
+  has_column_privilege('authenticated', 'public.bubbles', 'content', 'UPDATE'),
+  'authenticated can update bubble content'
+);
+select ok(
+  not has_column_privilege('authenticated', 'public.bubbles', 'breakdown_status', 'UPDATE'),
+  'authenticated cannot update breakdown_status'
+);
+select ok(
+  not has_column_privilege('authenticated', 'public.bubbles', 'breakdown_error', 'UPDATE'),
+  'authenticated cannot update breakdown_error'
+);
+select ok(
+  not has_column_privilege('authenticated', 'public.bubbles', 'breakdown_generation_count', 'UPDATE'),
+  'authenticated cannot update breakdown_generation_count'
+);
+select ok(
+  not has_column_privilege('authenticated', 'public.bubbles', 'manual_retry_count', 'UPDATE'),
+  'authenticated cannot update manual_retry_count'
+);
+select ok(
+  not has_column_privilege('authenticated', 'public.bubbles', 'manual_retry_on', 'UPDATE'),
+  'authenticated cannot update manual_retry_on'
+);
+select ok(
+  has_table_privilege('authenticated', 'public.judge_results', 'SELECT'),
+  'authenticated can select judge results'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.judge_results', 'INSERT'),
+  'authenticated cannot insert judge results'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.judge_results', 'UPDATE'),
+  'authenticated cannot update judge results'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.judge_results', 'DELETE'),
+  'authenticated cannot delete judge results'
+);
+select ok(
+  not exists (
+    select 1
+    from pg_class as relation
+    join pg_namespace as namespace on namespace.oid = relation.relnamespace
+    where namespace.nspname = 'public'
+      and relation.relkind = 'r'
+      and (
+        has_table_privilege('anon', relation.oid, 'INSERT')
+        or has_table_privilege('anon', relation.oid, 'UPDATE')
+        or has_table_privilege('anon', relation.oid, 'DELETE')
+      )
+  ),
+  'anon has no write privilege on any public table'
+);
 
 -- User A -------------------------------------------------------------------
 
@@ -214,22 +269,78 @@ select is(
 );
 
 select lives_ok(
+  $$ update public.bubbles set content = 'renamed idea' where id = 'c0000000-0000-4000-8000-000000000001' $$,
+  'user A can edit their bubble text'
+);
+select throws_ok(
+  $$ update public.bubbles set breakdown_status = 'failed' where id = 'c0000000-0000-4000-8000-000000000001' $$,
+  '42501',
+  null,
+  'user A cannot change breakdown_status'
+);
+select throws_ok(
+  $$ update public.bubbles set breakdown_error = 'timeout' where id = 'c0000000-0000-4000-8000-000000000001' $$,
+  '42501',
+  null,
+  'user A cannot change breakdown_error'
+);
+select throws_ok(
+  $$ update public.bubbles set breakdown_generation_count = 2 where id = 'c0000000-0000-4000-8000-000000000001' $$,
+  '42501',
+  null,
+  'user A cannot change the breakdown generation count'
+);
+select throws_ok(
+  $$
+    update public.bubbles
+    set manual_retry_count = 1, manual_retry_on = current_date
+    where id = 'c0000000-0000-4000-8000-000000000001'
+  $$,
+  '42501',
+  null,
+  'user A cannot change manual retry counters'
+);
+
+reset role;
+insert into public.judge_results (
+  id, user_id, bubble_id, provider, model, question_key, answer, latency_ms
+)
+values (
+  'c0000000-0000-4000-8000-000000000040',
+  '11111111-1111-4111-8111-111111111111',
+  'c0000000-0000-4000-8000-000000000001',
+  'llm',
+  'test',
+  'small_enough',
+  'yes',
+  12
+);
+set local role authenticated;
+
+select throws_ok(
   $$
     insert into public.judge_results (
-      id, user_id, bubble_id, provider, model, question_key, answer, latency_ms
+      user_id, bubble_id, provider, model, question_key, answer, latency_ms
     )
     values (
-      'c0000000-0000-4000-8000-000000000040',
       '11111111-1111-4111-8111-111111111111',
       'c0000000-0000-4000-8000-000000000001',
       'llm',
       'test',
       'small_enough',
       'yes',
-      12
+      1
     )
   $$,
-  'user A can insert a judge result without confidence'
+  '42501',
+  null,
+  'user A cannot insert a judge result'
+);
+select throws_ok(
+  $$ update public.judge_results set answer = 'no' $$,
+  '42501',
+  null,
+  'user A cannot update a judge result'
 );
 
 select ok(
@@ -498,8 +609,18 @@ select is((select count(*) from public.api_tokens), 0::bigint, 'user B cannot re
 
 select is_empty($$ update public.bubbles set content = 'stolen' returning 1 $$, 'user B cannot update bubbles');
 select is_empty($$ delete from public.bubbles returning 1 $$, 'user B cannot delete bubbles');
-select is_empty($$ update public.judge_results set answer = 'no' returning 1 $$, 'user B cannot update judge results');
-select is_empty($$ delete from public.judge_results returning 1 $$, 'user B cannot delete judge results');
+select throws_ok(
+  $$ update public.judge_results set answer = 'no' $$,
+  '42501',
+  null,
+  'user B cannot update judge results'
+);
+select throws_ok(
+  $$ delete from public.judge_results $$,
+  '42501',
+  null,
+  'user B cannot delete judge results'
+);
 select is_empty($$ update public.links set kind = 'dismissed' returning 1 $$, 'user B cannot update links');
 select is_empty($$ delete from public.links returning 1 $$, 'user B cannot delete links');
 select is_empty($$ update public.habits set title = 'hacked' returning 1 $$, 'user B cannot update habits');
@@ -546,9 +667,9 @@ select throws_ok(
       1
     )
   $$,
-  '23503',
+  '42501',
   null,
-  'user B cannot attach a judge result to user A bubble'
+  'user B cannot insert a judge result'
 );
 
 select throws_ok(
@@ -761,6 +882,162 @@ select throws_ok(
   '23514',
   null,
   'a parent must belong to the same tree'
+);
+
+select lives_ok(
+  $$
+    do $body$
+    begin
+      insert into public.goal_trees (id, user_id, mode)
+      values (
+        'c0000000-0000-4000-8000-000000000035',
+        '11111111-1111-4111-8111-111111111111',
+        'micro'
+      );
+      insert into public.goal_nodes (id, tree_id, user_id, kind, title)
+      values (
+        'c0000000-0000-4000-8000-000000000036',
+        'c0000000-0000-4000-8000-000000000035',
+        '11111111-1111-4111-8111-111111111111',
+        'action',
+        'linked action'
+      );
+      insert into public.habits (
+        id, user_id, category_id, title, size, est_minutes, interval_days, source, template_id, goal_node_id
+      )
+      values (
+        'c0000000-0000-4000-8000-000000000011',
+        '11111111-1111-4111-8111-111111111111',
+        'a0000000-0000-4000-8000-000000000001',
+        '喝一杯水',
+        'xs',
+        1,
+        1,
+        'preset',
+        'b0000000-0000-4000-8000-000000000001',
+        'c0000000-0000-4000-8000-000000000036'
+      );
+    end
+    $body$
+  $$,
+  'user A can link a habit copy to an action'
+);
+select lives_ok(
+  $$ delete from public.goal_nodes where id = 'c0000000-0000-4000-8000-000000000036' $$,
+  'deleting a linked action succeeds'
+);
+select is(
+  (select user_id::text from public.habits where id = 'c0000000-0000-4000-8000-000000000011'),
+  '11111111-1111-4111-8111-111111111111',
+  'habit user_id stays after the linked action is deleted'
+);
+select ok(
+  (select goal_node_id is null from public.habits where id = 'c0000000-0000-4000-8000-000000000011'),
+  'habit goal_node_id is cleared when the action is deleted'
+);
+
+select lives_ok(
+  $$
+    do $body$
+    begin
+      insert into public.habits (
+        id, user_id, category_id, title, size, est_minutes, interval_days, source, template_id
+      )
+      values (
+        'c0000000-0000-4000-8000-000000000012',
+        '11111111-1111-4111-8111-111111111111',
+        'a0000000-0000-4000-8000-000000000001',
+        '喝一杯水',
+        'xs',
+        1,
+        1,
+        'preset',
+        'b0000000-0000-4000-8000-000000000001'
+      );
+      insert into public.goal_trees (id, user_id, mode)
+      values (
+        'c0000000-0000-4000-8000-000000000037',
+        '11111111-1111-4111-8111-111111111111',
+        'micro'
+      );
+      insert into public.goal_nodes (id, tree_id, user_id, kind, title, habit_id)
+      values (
+        'c0000000-0000-4000-8000-000000000038',
+        'c0000000-0000-4000-8000-000000000037',
+        '11111111-1111-4111-8111-111111111111',
+        'action',
+        'points at habit',
+        'c0000000-0000-4000-8000-000000000012'
+      );
+    end
+    $body$
+  $$,
+  'user A can point an action at a habit'
+);
+select lives_ok(
+  $$ delete from public.habits where id = 'c0000000-0000-4000-8000-000000000012' $$,
+  'deleting a linked habit succeeds'
+);
+select is(
+  (select user_id::text from public.goal_nodes where id = 'c0000000-0000-4000-8000-000000000038'),
+  '11111111-1111-4111-8111-111111111111',
+  'action user_id stays after the linked habit is deleted'
+);
+select ok(
+  (select habit_id is null from public.goal_nodes where id = 'c0000000-0000-4000-8000-000000000038'),
+  'action habit_id is cleared when the habit is deleted'
+);
+
+select lives_ok(
+  $$
+    do $body$
+    begin
+      insert into public.goal_trees (id, user_id, mode)
+      values (
+        'c0000000-0000-4000-8000-000000000039',
+        '11111111-1111-4111-8111-111111111111',
+        'micro'
+      );
+      insert into public.goal_nodes (id, tree_id, user_id, kind, title)
+      values (
+        'c0000000-0000-4000-8000-000000000040',
+        'c0000000-0000-4000-8000-000000000039',
+        '11111111-1111-4111-8111-111111111111',
+        'action',
+        'tree action'
+      );
+      insert into public.habits (
+        id, user_id, category_id, title, size, est_minutes, interval_days, source, template_id, goal_node_id
+      )
+      values (
+        'c0000000-0000-4000-8000-000000000013',
+        '11111111-1111-4111-8111-111111111111',
+        'a0000000-0000-4000-8000-000000000001',
+        '喝一杯水',
+        'xs',
+        1,
+        1,
+        'preset',
+        'b0000000-0000-4000-8000-000000000001',
+        'c0000000-0000-4000-8000-000000000040'
+      );
+    end
+    $body$
+  $$,
+  'user A can attach a habit to an action in its own tree'
+);
+select lives_ok(
+  $$ delete from public.goal_trees where id = 'c0000000-0000-4000-8000-000000000039' $$,
+  'deleting a tree with a linked action succeeds'
+);
+select is(
+  (select user_id::text from public.habits where id = 'c0000000-0000-4000-8000-000000000013'),
+  '11111111-1111-4111-8111-111111111111',
+  'habit user_id stays after its tree is deleted'
+);
+select ok(
+  (select goal_node_id is null from public.habits where id = 'c0000000-0000-4000-8000-000000000013'),
+  'habit goal_node_id is cleared when its tree is deleted'
 );
 
 select throws_ok(

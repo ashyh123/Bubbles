@@ -22,6 +22,6 @@ export function safeNextPath(
     return '/';
   }
 
-  if (url.origin !== new URL(base).origin) return '/';
+  if (url.origin !== new URL(base).origin || url.pathname.startsWith('//')) return '/';
   return `${url.pathname}${url.search}${url.hash}`;
 }
