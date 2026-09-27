@@ -22,6 +22,17 @@ export function safeNextPath(
     return '/';
   }
 
+  // Dot segments can collapse to a protocol-relative path (//evil.example)
+  // that still has this origin. That string is an off-site redirect.
   if (url.origin !== new URL(base).origin || url.pathname.startsWith('//')) return '/';
   return `${url.pathname}${url.search}${url.hash}`;
+}
+
+/** Second check at the login callback, after safeNextPath. */
+export function callbackNextUrl(nextPath: string, origin: string): URL {
+  const destination = new URL(nextPath, origin);
+  if (destination.origin !== origin || destination.pathname.startsWith('//')) {
+    return new URL('/', origin);
+  }
+  return destination;
 }
