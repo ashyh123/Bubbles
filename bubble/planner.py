@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from bubble.config import DEFAULT_TIMEOUT
+
 _TEMPLATE_PATH = Path(__file__).resolve().parent / "prompts" / "plan.md"
 
 
@@ -94,11 +96,17 @@ def _effort_unsupported(exc: BaseException) -> bool:
     return "reasoning_effort" in text or "reasoning effort" in text
 
 
-def complete(client: Any, model: str, messages: list[dict[str, str]], reasoning_effort: str) -> str:
+def complete(
+    client: Any,
+    model: str,
+    messages: list[dict[str, str]],
+    reasoning_effort: str,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> str:
     """One chat completion. Drop reasoning_effort and retry if the model rejects it."""
 
     def _call(use_effort: bool) -> str:
-        kwargs: dict[str, Any] = {"model": model, "messages": messages}
+        kwargs: dict[str, Any] = {"model": model, "messages": messages, "timeout": timeout}
         if use_effort and reasoning_effort:
             kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
         response = client.chat.completions.create(**kwargs)
@@ -120,12 +128,13 @@ def plan_actions(
     reasoning_effort: str,
     idea: str,
     taste: str,
+    timeout: float = DEFAULT_TIMEOUT,
 ) -> list[dict[str, Any]]:
     """Ask the model for three actions. On a bad JSON payload, retry once."""
     messages = build_messages(idea, taste)
     error: PlanParseError | None = None
     for _attempt in range(2):
-        content = complete(client, model, messages, reasoning_effort)
+        content = complete(client, model, messages, reasoning_effort, timeout)
         try:
             return parse_actions(content)
         except PlanParseError as exc:

@@ -1,7 +1,11 @@
 import json
+from types import SimpleNamespace
+
+import httpx
+from openai import APITimeoutError
 
 from bubble.actions import Action, display_width, dropped_line, menu_lines
-from bubble.cli import main, run_session
+from bubble.cli import TIMEOUT_MESSAGE, WAITING, main, make_client, run_session
 from bubble.config import Config
 from bubble.safety import build_video_search_url
 from tests.fakes import FakeClient
@@ -92,7 +96,7 @@ def test_session_lists_actions_and_asks_before_opening(tmp_path):
         opener=opened.append,
     )
     assert code == 0
-    assert printed[0] == "正在拆分…"
+    assert printed[0] == "正在拆分…（通常 10 秒内）"
     assert "① 打开说明页  推荐先做 · 按你的 taste" in printed
     assert "② B站搜索「CS61B Project 1」" in printed
     assert "③ 看一份 200 字的作业简介" in printed
@@ -188,7 +192,7 @@ def test_enter_exits(tmp_path):
     )
     assert code == 0
     assert opened == []
-    assert printed[0] == "正在拆分…"
+    assert printed[0] == "正在拆分…（通常 10 秒内）"
 
 
 def test_dead_links_are_hidden_and_counted(tmp_path):
@@ -265,7 +269,7 @@ def test_probe_happens_before_the_menu_is_shown(tmp_path):
         print_fn=print_fn,
         opener=lambda _url: None,
     )
-    assert events[0] == ("print", "正在拆分…")
+    assert events[0] == ("print", "正在拆分…（通常 10 秒内）")
     assert events.index("llm") < events.index("probe")
     menu_at = events.index(("print", "① 打开说明页  推荐先做 · 按你的 taste"))
     assert events.index("probe") < menu_at
@@ -328,3 +332,58 @@ def test_no_usable_action_exits_nonzero(tmp_path):
     assert "这次没拆出能用的动作，换个说法再试一次？" in printed
     assert "有 2 条链接打不开，已略过" in printed
     assert "Traceback" not in "\n".join(printed)
+
+
+def _timeout_client(exc: BaseException):
+    class Completions:
+        def create(self, **_kwargs):
+            raise exc
+
+    return SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+
+
+def test_llm_timeout_prints_one_chinese_sentence(tmp_path):
+    printed = []
+    code = run_session(
+        "完成 CS61B Project 1",
+        config=_config(tmp_path),
+        client=_timeout_client(httpx.ReadTimeout("timed out")),
+        probe=lambda _url: (_ for _ in ()).throw(AssertionError("probed")),
+        input_fn=lambda _prompt="": (_ for _ in ()).throw(AssertionError("asked")),
+        print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
+        opener=lambda _url: (_ for _ in ()).throw(AssertionError("opened")),
+    )
+    assert code == 1
+    assert printed == [WAITING, TIMEOUT_MESSAGE]
+    assert "Traceback" not in "\n".join(printed)
+    assert "这次没拆出能用的动作" not in "\n".join(printed)
+
+
+def test_api_timeout_error_uses_the_same_sentence(tmp_path):
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    printed = []
+    code = run_session(
+        "完成 CS61B Project 1",
+        config=_config(tmp_path),
+        client=_timeout_client(APITimeoutError(request)),
+        probe=lambda _url: True,
+        input_fn=lambda _prompt="": "",
+        print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
+        opener=lambda _url: None,
+    )
+    assert code == 1
+    assert printed == [WAITING, TIMEOUT_MESSAGE]
+
+
+def test_make_client_uses_config_timeout(monkeypatch, tmp_path):
+    seen = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+    make_client(_config(tmp_path))
+    assert seen["timeout"] == 45.0
+    assert seen["base_url"] == "https://api.deepseek.com"
+    assert seen["api_key"] == "sk-test"

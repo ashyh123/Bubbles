@@ -40,6 +40,30 @@ def is_ip_host(host: str) -> bool:
     return host.isdigit()
 
 
+def site_homepage(url: str) -> str | None:
+    """Same-site root (scheme + host + ``/``), or None if this URL is already that root.
+
+    Unsafe URLs return None and are never turned into a second request. A non-443
+    port is kept. The result is checked with the same https rules as any open_url.
+    """
+    if not is_safe_https_url(url):
+        return None
+    parts = urlsplit(url)
+    if parts.path in ("", "/") and not parts.query and not parts.fragment:
+        return None
+    host = parts.hostname
+    if not host:
+        return None
+    port = parts.port
+    if port is not None and port != 443:
+        home = f"https://{host}:{port}/"
+    else:
+        home = f"https://{host}/"
+    if home == url or not is_safe_https_url(home):
+        return None
+    return home
+
+
 def is_safe_https_url(url: str) -> bool:
     """https only, no userinfo, no IP host, no whitespace or shell metacharacters."""
     if not isinstance(url, str) or not url or len(url) > 2000:

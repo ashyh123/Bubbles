@@ -16,6 +16,7 @@ from bubble.safety import (
     is_official_video_search,
     is_safe_https_url,
     log_discard,
+    site_homepage,
 )
 
 CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
@@ -31,6 +32,7 @@ class Action:
     uses_taste: bool = False
     keyword: str = ""
     title: str = ""
+    fell_back: bool = False
 
     @property
     def type(self) -> str:
@@ -76,6 +78,7 @@ def _text_and_title(item: dict) -> tuple[str, str]:
 def _collect(items: list, check_url: Callable[[str], bool]) -> tuple[list[Action], int]:
     kept: list[Action] = []
     dropped = 0
+    fell_back = 0
     for item in items:
         if len(kept) == MAX_ACTIONS:
             break
@@ -118,24 +121,42 @@ def _collect(items: list, check_url: Callable[[str], bool]) -> tuple[list[Action
             url = item.get("url")
             if not isinstance(url, str) or not is_safe_https_url(url):
                 dropped += 1
-                log_discard(f"discard open_url unsafe: {url!r}")
+                log_discard(f"丢弃 open_url unsafe: {url!r}")
                 continue
-            if not check_url(url):
-                dropped += 1
-                log_discard(f"discard open_url unreachable: {url}")
-                continue
-            kept.append(
-                Action(
-                    kind="open_url",
-                    text=text or title or "链接",
-                    title=title or text or "链接",
-                    url=url,
-                    uses_taste=uses_taste,
+            if check_url(url):
+                kept.append(
+                    Action(
+                        kind="open_url",
+                        text=text or title or "链接",
+                        title=title or text or "链接",
+                        url=url,
+                        uses_taste=uses_taste,
+                    )
                 )
-            )
+                continue
+            home = site_homepage(url)
+            if home is not None and check_url(home):
+                fell_back += 1
+                log_discard(f"退回首页 {url} -> {home}")
+                kept.append(
+                    Action(
+                        kind="open_url",
+                        text=text or title or "链接",
+                        title=title or text or "链接",
+                        url=home,
+                        uses_taste=uses_taste,
+                        fell_back=True,
+                    )
+                )
+                continue
+            dropped += 1
+            log_discard(f"丢弃 open_url unreachable: {url}")
             continue
         log_discard(f"discard unknown type: {item.get('kind', item.get('type'))!r}")
+    if fell_back:
+        log_discard(f"计数 退回首页 {fell_back}")
     if dropped:
+        log_discard(f"计数 丢弃 {dropped}")
         log_discard(dropped_line(dropped))
     return kept, dropped
 
@@ -206,6 +227,8 @@ def menu_lines(actions: list[Action]) -> list[str]:
             tags.append("推荐先做")
         if action.uses_taste:
             tags.append("按你的 taste")
+        if action.fell_back:
+            tags.append("原页面打不开，已换成首页")
         suffix = f"  {' · '.join(tags)}" if tags else ""
         number = CIRCLED[index] if index < len(CIRCLED) else f"{index + 1}."
         prefix = f"{number} "

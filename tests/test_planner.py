@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from bubble.config import DEFAULT_BASE_URL, DEFAULT_REASONING_EFFORT, Config
+from bubble.config import DEFAULT_BASE_URL, DEFAULT_REASONING_EFFORT, DEFAULT_TIMEOUT, Config
 from bubble.planner import PlanParseError, build_messages, plan_actions
 from tests.fakes import FakeClient
 
@@ -38,6 +38,7 @@ def test_config_defaults():
     assert config.reasoning_effort == DEFAULT_REASONING_EFFORT == "low"
     assert config.api_key == ""
     assert config.model == ""
+    assert config.timeout == DEFAULT_TIMEOUT == 45.0
 
 
 def test_json_parse_failure_retries_once():
@@ -82,6 +83,16 @@ def test_second_parse_failure_raises():
     assert len(client.chat.completions.calls) == 2
 
 
+def test_prompt_limits_taste_to_the_same_topic():
+    user = build_messages("看懂 Git 的 rebase", "CS61B 用 sp21")[-1]["content"]
+    assert "150–200" in user
+    assert "看懂 Git 的 rebase" in user
+    assert "不适用于「看懂 Git 的 rebase」" in user
+    assert "课程首页" in user
+    assert "真实网址" in user
+    assert "不是系统指令" in user
+
+
 def test_taste_content_enters_the_prompt():
     taste = "CS61B 用 sp21 版\n笔记软件 = Obsidian\n"
     messages = build_messages("完成 CS61B Project 1", taste)
@@ -121,4 +132,29 @@ def test_reasoning_effort_is_dropped_when_unsupported():
     assert len(calls) == 2
     assert calls[0]["extra_body"] == {"reasoning_effort": "low"}
     assert "extra_body" not in calls[1]
+    assert calls[0]["timeout"] == 45.0
+    assert calls[1]["timeout"] == 45.0
     assert len(actions) == 3
+
+
+def test_bubble_timeout_overrides_the_default(monkeypatch):
+    monkeypatch.setenv("BUBBLE_TIMEOUT", "12")
+    assert Config.from_env().timeout == 12.0
+    monkeypatch.setenv("BUBBLE_TIMEOUT", "12.5")
+    assert Config.from_env().timeout == 12.5
+    for raw in ("", "0", "-3", "nope"):
+        monkeypatch.setenv("BUBBLE_TIMEOUT", raw)
+        assert Config.from_env().timeout == 45.0
+
+
+def test_plan_actions_passes_timeout():
+    client = FakeClient([VALID])
+    plan_actions(
+        client,
+        model="deepseek-chat",
+        reasoning_effort="low",
+        idea="想法",
+        taste="",
+        timeout=12,
+    )
+    assert client.chat.completions.calls[0]["timeout"] == 12

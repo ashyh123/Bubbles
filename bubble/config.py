@@ -8,6 +8,20 @@ from pathlib import Path
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_REASONING_EFFORT = "low"
+DEFAULT_TIMEOUT = 45.0
+
+
+def _timeout_from_env() -> float:
+    raw = os.environ.get("BUBBLE_TIMEOUT", "").strip()
+    if not raw:
+        return DEFAULT_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_TIMEOUT
+    if value <= 0:
+        return DEFAULT_TIMEOUT
+    return value
 
 
 @dataclass(frozen=True)
@@ -17,6 +31,7 @@ class Config:
     model: str
     reasoning_effort: str
     taste_path: Path
+    timeout: float = DEFAULT_TIMEOUT
 
     @classmethod
     def from_env(cls) -> Config:
@@ -35,4 +50,5 @@ class Config:
             model=os.environ.get("BUBBLE_MODEL", "").strip(),
             reasoning_effort=effort,
             taste_path=taste_path,
+            timeout=_timeout_from_env(),
         )

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
-from openai import OpenAIError
+from openai import APITimeoutError, OpenAIError
 
 from bubble.actions import Action, dropped_line, execute, menu_lines, prepare_actions
 from bubble.config import Config
@@ -18,6 +18,8 @@ from bubble.taste import TasteError, read_taste, remember
 
 NO_ACTIONS = "这次没拆出能用的动作，换个说法再试一次？"
 MISSING_KEY = "缺少 DEEPSEEK_API_KEY，请参考 .env.example 配置"
+WAITING = "正在拆分…（通常 10 秒内）"
+TIMEOUT_MESSAGE = "拆分超时了，请再试一次。"
 
 USAGE = """\
 用法：
@@ -29,6 +31,7 @@ USAGE = """\
   BUBBLE_BASE_URL                      默认 https://api.deepseek.com
   BUBBLE_MODEL                         必填
   BUBBLE_REASONING_EFFORT              默认 low，模型不支持时会去掉后重试
+  BUBBLE_TIMEOUT                       默认 45，模型请求超时秒数
   BUBBLE_TASTE_PATH                    默认 ~/.bubble/taste.md
 """
 
@@ -40,7 +43,7 @@ def console_main() -> None:
 def make_client(config: Config) -> Any:
     from openai import OpenAI
 
-    return OpenAI(api_key=config.api_key, base_url=config.base_url)
+    return OpenAI(api_key=config.api_key, base_url=config.base_url, timeout=config.timeout)
 
 
 def _parse_choice(text: str, count: int) -> int | None:
@@ -85,7 +88,7 @@ def run_session(
         print_fn = print
     if opener is None:
         opener = _open_browser
-    print_fn("正在拆分…")
+    print_fn(WAITING)
     if print_fn is print:
         sys.stdout.flush()
     taste = read_taste(config.taste_path)
@@ -96,7 +99,11 @@ def run_session(
             reasoning_effort=config.reasoning_effort,
             idea=idea,
             taste=taste,
+            timeout=config.timeout,
         )
+    except (APITimeoutError, httpx.TimeoutException):
+        print_fn(TIMEOUT_MESSAGE)
+        return 1
     except (PlanParseError, OpenAIError, httpx.HTTPError):
         print_fn(NO_ACTIONS)
         return 1
