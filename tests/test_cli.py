@@ -2,10 +2,10 @@ import json
 from types import SimpleNamespace
 
 import httpx
-from openai import APITimeoutError
+from openai import APITimeoutError, AuthenticationError, PermissionDeniedError
 
 from bubble.actions import Action, display_width, dropped_line, menu_lines
-from bubble.cli import TIMEOUT_MESSAGE, WAITING, main, make_client, run_session
+from bubble.cli import BAD_KEY, TIMEOUT_MESSAGE, WAITING, main, make_client, run_session
 from bubble.config import Config
 from bubble.safety import build_video_search_url
 from tests.fakes import FakeClient
@@ -96,7 +96,7 @@ def test_session_lists_actions_and_asks_before_opening(tmp_path):
         opener=opened.append,
     )
     assert code == 0
-    assert printed[0] == "正在拆分…（通常 10 秒内）"
+    assert printed[0] == "正在拆分…（通常 5–15 秒）"
     assert "① 打开说明页  推荐先做 · 按你的 taste" in printed
     assert "② B站搜索「CS61B Project 1」" in printed
     assert "③ 看一份 200 字的作业简介" in printed
@@ -192,7 +192,7 @@ def test_enter_exits(tmp_path):
     )
     assert code == 0
     assert opened == []
-    assert printed[0] == "正在拆分…（通常 10 秒内）"
+    assert printed[0] == "正在拆分…（通常 5–15 秒）"
 
 
 def test_dead_links_are_hidden_and_counted(tmp_path):
@@ -269,7 +269,7 @@ def test_probe_happens_before_the_menu_is_shown(tmp_path):
         print_fn=print_fn,
         opener=lambda _url: None,
     )
-    assert events[0] == ("print", "正在拆分…（通常 10 秒内）")
+    assert events[0] == ("print", "正在拆分…（通常 5–15 秒）")
     assert events.index("llm") < events.index("probe")
     menu_at = events.index(("print", "① 打开说明页  推荐先做 · 按你的 taste"))
     assert events.index("probe") < menu_at
@@ -379,7 +379,7 @@ def test_fallback_confirms_the_homepage_url(tmp_path):
         opener=opened.append,
     )
     assert code == 0
-    assert "① 打开 首页  推荐先做 · 按你的 taste · 原页面打不开，已换成首页" in printed
+    assert "① 打开 CS61B sp21 · 首页  推荐先做 · 按你的 taste · 原页面打不开，已换成首页" in printed
     assert deep not in "\n".join(printed)
     assert prompts[1] == f"将打开 {home}  确认？[Y/n] › "
     assert opened == [home]
@@ -428,5 +428,117 @@ def test_make_client_uses_config_timeout(monkeypatch, tmp_path):
     monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
     make_client(_config(tmp_path))
     assert seen["timeout"] == 45.0
+    assert seen["max_retries"] == 0
     assert seen["base_url"] == "https://api.deepseek.com"
     assert seen["api_key"] == "sk-test"
+
+
+def test_three_tags_stay_whole_inside_eighty_columns():
+    action = Action(
+        kind="open_url",
+        text="页面",
+        title="课程站点 · " + ("很长的页面标题" * 30),
+        url="https://example.com/p",
+        uses_taste=True,
+        fell_back=True,
+    )
+    line = menu_lines([action])[0]
+    assert display_width(line) <= 80
+    assert line.endswith("  推荐先做 · 按你的 taste · 原页面打不开，已换成首页")
+    assert "…" in line
+
+
+def test_taste_tag_is_applied_once():
+    actions = [
+        Action(kind="brief", text="一", title="一", uses_taste=True),
+        Action(kind="brief", text="二", title="二", uses_taste=True),
+        Action(kind="brief", text="三", title="三", uses_taste=True),
+    ]
+    lines = menu_lines(actions)
+    assert lines[0].count("按你的 taste") == 1
+    assert "按你的 taste" not in lines[1]
+    assert "按你的 taste" not in lines[2]
+    later = [
+        Action(kind="brief", text="一", title="一", uses_taste=False),
+        Action(kind="brief", text="二", title="二", uses_taste=True),
+        Action(kind="brief", text="三", title="三", uses_taste=True),
+    ]
+    lines = menu_lines(later)
+    assert "按你的 taste" not in lines[0]
+    assert "按你的 taste" in lines[1]
+    assert "按你的 taste" not in lines[2]
+
+
+def _status_error(cls, status: int):
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    response = httpx.Response(status, request=request)
+    return cls("rejected", response=response, body=None)
+
+
+def test_invalid_key_is_not_a_retry_hint(tmp_path):
+    for error in (
+        _status_error(AuthenticationError, 401),
+        _status_error(PermissionDeniedError, 403),
+    ):
+        printed = []
+        code = run_session(
+            "完成 CS61B Project 1",
+            config=_config(tmp_path),
+            client=_timeout_client(error),
+            probe=lambda _url: (_ for _ in ()).throw(AssertionError("probed")),
+            input_fn=lambda _prompt="": (_ for _ in ()).throw(AssertionError("asked")),
+            print_fn=lambda *args, printed=printed, **_kwargs: printed.append(args[0] if args else ""),
+            opener=lambda _url: (_ for _ in ()).throw(AssertionError("opened")),
+        )
+        assert code == 1
+        assert printed == [WAITING, BAD_KEY]
+        assert "换个说法" not in "\n".join(printed)
+        assert "Traceback" not in "\n".join(printed)
+
+
+def test_eof_and_ctrl_c_at_prompts_exit_quietly(tmp_path):
+    plan = json.dumps(PLAN, ensure_ascii=False)
+    cases = (
+        (EOFError, 0, "选一条"),
+        (KeyboardInterrupt, 130, "选一条"),
+        (EOFError, 0, "确认"),
+        (KeyboardInterrupt, 130, "确认"),
+    )
+    for exc_type, expected, where in cases:
+        opened = []
+        printed = []
+
+        def fake_input(prompt="", exc_type=exc_type, where=where):
+            if where == "确认" and "确认" not in prompt:
+                return "1"
+            raise exc_type
+
+        code = run_session(
+            "完成 CS61B Project 1",
+            config=_config(tmp_path),
+            client=FakeClient([plan]),
+            probe=lambda _url: True,
+            input_fn=fake_input,
+            print_fn=lambda *args, printed=printed, **_kwargs: printed.append(args[0] if args else ""),
+            opener=opened.append,
+        )
+        assert code == expected
+        assert opened == []
+        assert "Traceback" not in "\n".join(printed)
+        assert "已打开" not in "\n".join(printed)
+
+
+def test_ctrl_c_while_waiting_prints_no_traceback(tmp_path):
+    printed = []
+    code = run_session(
+        "完成 CS61B Project 1",
+        config=_config(tmp_path),
+        client=_timeout_client(KeyboardInterrupt()),
+        probe=lambda _url: (_ for _ in ()).throw(AssertionError("probed")),
+        input_fn=lambda _prompt="": (_ for _ in ()).throw(AssertionError("asked")),
+        print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
+        opener=lambda _url: (_ for _ in ()).throw(AssertionError("opened")),
+    )
+    assert code == 130
+    assert printed == [WAITING]
+    assert "Traceback" not in "\n".join(printed)

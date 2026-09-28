@@ -16,6 +16,7 @@ def isolated_env(monkeypatch, tmp_path):
         "BUBBLE_REASONING_EFFORT",
         "BUBBLE_TIMEOUT",
         "BUBBLE_TASTE_PATH",
+        "BUBBLE_LOG_PATH",
     ):
         monkeypatch.delenv(key, raising=False)
     return home

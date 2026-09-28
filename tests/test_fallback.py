@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from bubble.actions import menu_lines, process
-from bubble.safety import site_homepage
+from bubble.actions import Action, action_body, clip_brief, homepage_label, menu_lines, process
+from bubble.safety import log_discard, site_homepage
 
 DEEP = "https://sp21.datastructur.es/materials/proj/proj1/proj1"
 HOME = "https://sp21.datastructur.es/"
@@ -47,10 +47,10 @@ def test_unreachable_page_falls_back_to_homepage():
     assert calls == [DEEP, HOME]
     assert len(kept) == 1
     assert kept[0].url == HOME
-    assert kept[0].title == "首页"
+    assert kept[0].title == "sp21.datastructur.es · 首页"
     assert kept[0].fell_back is True
     line = menu_lines(kept)[0]
-    assert "打开 首页" in line
+    assert "打开 sp21.datastructur.es · 首页" in line
     assert "原页面打不开，已换成首页" in line
     assert "推荐先做" in line
     log = _log()
@@ -117,3 +117,41 @@ def test_unsafe_url_is_not_fetched_and_has_no_homepage():
     assert calls == []
     assert "计数 丢弃 1" in _log()
     assert "退回首页" not in _log()
+
+
+def test_homepage_label_uses_course_then_host():
+    home = "https://www.example.com/"
+    assert homepage_label("CS61B sp21 · Project 1 说明页", home) == "CS61B sp21 · 首页"
+    assert homepage_label("打开 CS61B · 作业", home) == "CS61B · 首页"
+    assert homepage_label("官网", home) == "example.com · 首页"
+    assert homepage_label("", "https://sp21.datastructur.es/materials/x") == "sp21.datastructur.es · 首页"
+
+
+def test_brief_clips_to_two_hundred_characters():
+    assert clip_brief("开头。" + ("甲" * 300)) == "开头。"
+    windowed = ("甲" * 150) + "！" + ("乙" * 100)
+    assert clip_brief(windowed) == ("甲" * 150) + "！"
+    assert len(clip_brief(windowed)) <= 200
+    plain = "乙" * 250
+    assert clip_brief(plain) == ("乙" * 200) + "…"
+    assert clip_brief("短句。") == "短句。"
+
+
+def test_brief_menu_spaces_chinese_and_english():
+    action = Action(kind="brief", text="正文", title="rebase原理")
+    assert action_body(action) == "看一份 200 字的 rebase 原理简介"
+
+
+def test_log_follows_taste_directory(monkeypatch, tmp_path):
+    taste = tmp_path / "box" / "taste.md"
+    monkeypatch.setenv("BUBBLE_TASTE_PATH", str(taste))
+    log_discard("计数 丢弃 1")
+    assert "计数 丢弃 1" in (tmp_path / "box" / "log").read_text(encoding="utf-8")
+
+
+def test_log_path_env_overrides_taste_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv("BUBBLE_TASTE_PATH", str(tmp_path / "taste.md"))
+    custom = tmp_path / "other" / "events.log"
+    monkeypatch.setenv("BUBBLE_LOG_PATH", str(custom))
+    log_discard("退回首页")
+    assert "退回首页" in custom.read_text(encoding="utf-8")

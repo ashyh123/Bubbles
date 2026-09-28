@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
+DEFAULT_MODEL = "deepseek-flash"
 DEFAULT_REASONING_EFFORT = "low"
 DEFAULT_TIMEOUT = 45.0
 
@@ -32,6 +33,12 @@ class Config:
     reasoning_effort: str
     taste_path: Path
     timeout: float = DEFAULT_TIMEOUT
+    log_path: Path | None = None
+
+    def resolved_log_path(self) -> Path:
+        if self.log_path is not None:
+            return self.log_path
+        return self.taste_path.parent / "log"
 
     @classmethod
     def from_env(cls) -> Config:
@@ -44,11 +51,18 @@ class Config:
             taste_path = Path.home() / ".bubble" / "taste.md"
         bubble_key = os.environ.get("BUBBLE_API_KEY", "").strip()
         deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        log_raw = os.environ.get("BUBBLE_LOG_PATH", "").strip()
+        if log_raw:
+            log_path = Path(log_raw).expanduser()
+        else:
+            log_path = taste_path.parent / "log"
+        model = os.environ.get("BUBBLE_MODEL", "").strip() or DEFAULT_MODEL
         return cls(
             api_key=bubble_key or deepseek_key,
             base_url=base_url,
-            model=os.environ.get("BUBBLE_MODEL", "").strip(),
+            model=model,
             reasoning_effort=effort,
             taste_path=taste_path,
             timeout=_timeout_from_env(),
+            log_path=log_path,
         )

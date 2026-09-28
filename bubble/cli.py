@@ -8,17 +8,18 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
-from openai import APITimeoutError, OpenAIError
+from openai import APITimeoutError, AuthenticationError, OpenAIError, PermissionDeniedError
 
 from bubble.actions import Action, dropped_line, execute, menu_lines, prepare_actions
 from bubble.config import Config
-from bubble.planner import PlanParseError, plan_actions
-from bubble.safety import probe_url
+from bubble.planner import PlanParseError, PlanTimeout, plan_actions
+from bubble.safety import probe_url, use_log_path
 from bubble.taste import TasteError, read_taste, remember
 
 NO_ACTIONS = "这次没拆出能用的动作，换个说法再试一次？"
 MISSING_KEY = "缺少 BUBBLE_API_KEY，请参考 .env.example 配置"
-WAITING = "正在拆分…（通常 10 秒内）"
+BAD_KEY = "密钥无效，请检查 BUBBLE_API_KEY"
+WAITING = "正在拆分…（通常 5–15 秒）"
 TIMEOUT_MESSAGE = "这次拆分太久了，请稍后再试一次"
 
 USAGE = """\
@@ -29,10 +30,11 @@ USAGE = """\
 配置从环境变量读取（见 .env.example）：
   BUBBLE_API_KEY 或 DEEPSEEK_API_KEY   必填
   BUBBLE_BASE_URL                      默认 https://api.deepseek.com
-  BUBBLE_MODEL                         必填
+  BUBBLE_MODEL                         默认 deepseek-flash
   BUBBLE_REASONING_EFFORT              默认 low，模型不支持时会去掉后重试
-  BUBBLE_TIMEOUT                       默认 45，模型请求超时秒数
+  BUBBLE_TIMEOUT                       默认 45，两次模型请求共用的总秒数
   BUBBLE_TASTE_PATH                    默认 ~/.bubble/taste.md
+  BUBBLE_LOG_PATH                      默认与 taste.md 同目录的 log
 """
 
 
@@ -43,7 +45,12 @@ def console_main() -> None:
 def make_client(config: Config) -> Any:
     from openai import OpenAI
 
-    return OpenAI(api_key=config.api_key, base_url=config.base_url, timeout=config.timeout)
+    return OpenAI(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        timeout=config.timeout,
+        max_retries=0,
+    )
 
 
 def _parse_choice(text: str, count: int) -> int | None:
@@ -88,6 +95,42 @@ def run_session(
         print_fn = print
     if opener is None:
         opener = _open_browser
+    with use_log_path(config.resolved_log_path()):
+        return _run_session(
+            idea,
+            config=config,
+            client=client,
+            probe=probe,
+            input_fn=input_fn,
+            print_fn=print_fn,
+            opener=opener,
+        )
+
+
+class _Quit(Exception):
+    def __init__(self, code: int) -> None:
+        self.code = code
+
+
+def _ask(input_fn: Callable[[str], str], prompt: str) -> str:
+    try:
+        return input_fn(prompt)
+    except EOFError as exc:
+        raise _Quit(0) from exc
+    except KeyboardInterrupt as exc:
+        raise _Quit(130) from exc
+
+
+def _run_session(
+    idea: str,
+    *,
+    config: Config,
+    client: Any,
+    probe: Callable[[str], bool],
+    input_fn: Callable[[str], str],
+    print_fn: Callable[..., None],
+    opener: Callable[[str], object],
+) -> int:
     print_fn(WAITING)
     if print_fn is print:
         sys.stdout.flush()
@@ -101,8 +144,13 @@ def run_session(
             taste=taste,
             timeout=config.timeout,
         )
-    except (APITimeoutError, httpx.TimeoutException):
+    except KeyboardInterrupt:
+        return 130
+    except (APITimeoutError, httpx.TimeoutException, PlanTimeout):
         print_fn(TIMEOUT_MESSAGE)
+        return 1
+    except (AuthenticationError, PermissionDeniedError):
+        print_fn(BAD_KEY)
         return 1
     except (PlanParseError, OpenAIError, httpx.HTTPError):
         print_fn(NO_ACTIONS)
@@ -119,16 +167,21 @@ def run_session(
         return 1
     print_fn("")
 
-    while True:
-        choice = input_fn(f"选一条 [1-{len(actions)}]，回车退出 › ")
-        if choice.strip() == "":
-            return 0
-        index = _parse_choice(choice, len(actions))
-        if index is None:
-            print_fn(f"请输入 1-{len(actions)}")
-            continue
-        if _confirm_and_run(actions[index], input_fn=input_fn, print_fn=print_fn, opener=opener):
-            return 0
+    try:
+        while True:
+            choice = _ask(input_fn, f"选一条 [1-{len(actions)}]，回车退出 › ")
+            if choice.strip() == "":
+                return 0
+            index = _parse_choice(choice, len(actions))
+            if index is None:
+                print_fn(f"请输入 1-{len(actions)}")
+                continue
+            if _confirm_and_run(
+                actions[index], input_fn=input_fn, print_fn=print_fn, opener=opener
+            ):
+                return 0
+    except _Quit as stopped:
+        return stopped.code
 
 
 def _confirm_and_run(
@@ -140,7 +193,7 @@ def _confirm_and_run(
 ) -> bool:
     """Return True when a page was opened and the session should end."""
     if action.kind in {"open_url", "video_search"}:
-        answer = input_fn(f"将打开 {action.url}  确认？[Y/n] › ")
+        answer = _ask(input_fn, f"将打开 {action.url}  确认？[Y/n] › ")
         if not _confirmed(answer):
             return False
         opened = execute(action, opener, True)

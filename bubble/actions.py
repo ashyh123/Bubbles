@@ -10,6 +10,7 @@ import json
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from bubble.safety import (
     build_bilibili_url,
@@ -21,7 +22,9 @@ from bubble.safety import (
 
 CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
 MAX_ACTIONS = 3
+BRIEF_LIMIT = 200
 _ALLOWED = {"open_url", "video_search", "brief"}
+_SENTENCE_END = "。！？"
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,57 @@ def _kind_of(item: dict) -> str | None:
     return None
 
 
+def clip_brief(text: str, limit: int = BRIEF_LIMIT) -> str:
+    """Keep a brief within ``limit`` characters, preferring a sentence boundary."""
+    body = text.strip()
+    if len(body) <= limit:
+        return body
+    window = body[:limit]
+    cut = max(window.rfind(mark) for mark in _SENTENCE_END)
+    if cut >= 0:
+        return window[: cut + 1]
+    return window + "…"
+
+
+def homepage_label(original_title: str, home_url: str) -> str:
+    """``课程名 · 首页``. Course name comes from the model's title, else the host."""
+    raw = (original_title or "").strip()
+    if raw.startswith("打开"):
+        raw = raw.removeprefix("打开").strip()
+    course = ""
+    for separator in (" · ", "·"):
+        if separator in raw:
+            course = raw.split(separator, 1)[0].strip()
+            break
+    if not course:
+        host = (urlsplit(home_url).hostname or "").removeprefix("www.")
+        course = host or "课程"
+    return f"{course} · 首页"
+
+
+def _is_cjk(char: str) -> bool:
+    code = ord(char)
+    return (
+        0x4E00 <= code <= 0x9FFF
+        or 0x3400 <= code <= 0x4DBF
+        or 0xF900 <= code <= 0xFAFF
+    )
+
+
+def space_cjk_alnum(text: str) -> str:
+    """Insert a space wherever a CJK character touches an ASCII letter or digit."""
+    pieces: list[str] = []
+    previous = ""
+    for char in text:
+        alnum = char.isascii() and char.isalnum()
+        previous_alnum = previous.isascii() and previous.isalnum() if previous else False
+        if previous and ((_is_cjk(previous) and alnum) or (previous_alnum and _is_cjk(char))):
+            pieces.append(" ")
+        pieces.append(char)
+        previous = char
+    return "".join(pieces)
+
+
 def _text_and_title(item: dict) -> tuple[str, str]:
     raw_text = item.get("text") if isinstance(item.get("text"), str) else ""
     raw_title = item.get("title") if isinstance(item.get("title"), str) else ""
@@ -93,7 +147,12 @@ def _collect(items: list, check_url: Callable[[str], bool]) -> tuple[list[Action
                 log_discard("discard brief without text")
                 continue
             kept.append(
-                Action(kind="brief", text=text.strip(), title=title.strip(), uses_taste=uses_taste)
+                Action(
+                    kind="brief",
+                    text=clip_brief(text),
+                    title=title.strip(),
+                    uses_taste=uses_taste,
+                )
             )
             continue
         if kind == "video_search":
@@ -138,11 +197,12 @@ def _collect(items: list, check_url: Callable[[str], bool]) -> tuple[list[Action
             if home is not None and check_url(home):
                 fell_back += 1
                 log_discard(f"退回首页 {url} -> {home}")
+                label = homepage_label(title or text, home)
                 kept.append(
                     Action(
                         kind="open_url",
-                        text="首页",
-                        title="首页",
+                        text=label,
+                        title=label,
                         url=home,
                         uses_taste=uses_taste,
                         fell_back=True,
@@ -216,17 +276,19 @@ def action_body(action: Action) -> str:
         return f"B站搜索「{keyword}」"
     topic = (action.title or action.text or "这个").strip()
     topic = topic.removeprefix("看一份 200 字的").removesuffix("简介").strip() or "这个"
-    return f"看一份 200 字的{topic}简介"
+    return space_cjk_alnum(f"看一份 200 字的{topic}简介")
 
 
 def menu_lines(actions: list[Action]) -> list[str]:
     lines: list[str] = []
+    taste_marked = False
     for index, action in enumerate(actions):
         tags: list[str] = []
         if index == 0:
             tags.append("推荐先做")
-        if action.uses_taste:
+        if action.uses_taste and not taste_marked:
             tags.append("按你的 taste")
+            taste_marked = True
         if action.fell_back:
             tags.append("原页面打不开，已换成首页")
         suffix = f"  {' · '.join(tags)}" if tags else ""

@@ -2,8 +2,14 @@ import json
 
 import pytest
 
-from bubble.config import DEFAULT_BASE_URL, DEFAULT_REASONING_EFFORT, DEFAULT_TIMEOUT, Config
-from bubble.planner import PlanParseError, build_messages, plan_actions
+from bubble.config import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
+    DEFAULT_TIMEOUT,
+    Config,
+)
+from bubble.planner import PlanParseError, PlanTimeout, build_messages, plan_actions
 from tests.fakes import FakeClient
 
 SAMPLE = {
@@ -37,8 +43,9 @@ def test_config_defaults():
     assert config.base_url == DEFAULT_BASE_URL == "https://api.deepseek.com"
     assert config.reasoning_effort == DEFAULT_REASONING_EFFORT == "low"
     assert config.api_key == ""
-    assert config.model == ""
+    assert config.model == DEFAULT_MODEL == "deepseek-flash"
     assert config.timeout == DEFAULT_TIMEOUT == 45.0
+    assert config.log_path == config.taste_path.parent / "log"
 
 
 def test_json_parse_failure_retries_once():
@@ -132,8 +139,8 @@ def test_reasoning_effort_is_dropped_when_unsupported():
     assert len(calls) == 2
     assert calls[0]["extra_body"] == {"reasoning_effort": "low"}
     assert "extra_body" not in calls[1]
-    assert calls[0]["timeout"] == 45.0
-    assert calls[1]["timeout"] == 45.0
+    assert calls[0]["timeout"] == calls[1]["timeout"]
+    assert calls[0]["timeout"] == pytest.approx(45, abs=0.1)
     assert len(actions) == 3
 
 
@@ -157,4 +164,55 @@ def test_plan_actions_passes_timeout():
         taste="",
         timeout=12,
     )
-    assert client.chat.completions.calls[0]["timeout"] == 12
+    assert client.chat.completions.calls[0]["timeout"] == pytest.approx(12, abs=0.1)
+
+
+def test_json_retry_shares_one_time_budget(monkeypatch):
+    clock = {"now": 1_000.0}
+    monkeypatch.setattr("bubble.planner.time.monotonic", lambda: clock["now"])
+    client = FakeClient(["不是 JSON", VALID])
+    original = client.chat.completions.create
+    seen: list[float] = []
+
+    def create(**kwargs):
+        seen.append(kwargs["timeout"])
+        clock["now"] += 10
+        return original(**kwargs)
+
+    client.chat.completions.create = create
+    actions = plan_actions(
+        client,
+        model="deepseek-flash",
+        reasoning_effort="low",
+        idea="想法",
+        taste="",
+        timeout=45,
+    )
+    assert seen == [45.0, 35.0]
+    assert len(actions) == 3
+
+
+def test_second_call_is_skipped_when_under_one_second(monkeypatch):
+    clock = {"now": 0.0}
+    monkeypatch.setattr("bubble.planner.time.monotonic", lambda: clock["now"])
+    client = FakeClient(["不是 JSON", VALID])
+    original = client.chat.completions.create
+    seen: list[float] = []
+
+    def create(**kwargs):
+        seen.append(kwargs["timeout"])
+        clock["now"] += 44.5
+        return original(**kwargs)
+
+    client.chat.completions.create = create
+    with pytest.raises(PlanTimeout):
+        plan_actions(
+            client,
+            model="deepseek-flash",
+            reasoning_effort="low",
+            idea="想法",
+            taste="",
+            timeout=45,
+        )
+    assert seen == [45.0]
+    assert client.chat.completions.replies == [VALID]

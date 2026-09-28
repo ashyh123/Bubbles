@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 from bubble.config import DEFAULT_TIMEOUT
+
+# A second model call is not worth starting when less than this remains.
+MIN_RETRY_SECONDS = 1.0
 
 _TEMPLATE_PATH = Path(__file__).resolve().parent / "prompts" / "plan.md"
 
 
 class PlanParseError(ValueError):
     """The model did not return three JSON actions."""
+
+
+class PlanTimeout(Exception):
+    """The shared model-call budget ran out before a usable plan came back."""
 
 
 def load_plan_template() -> str:
@@ -130,11 +138,21 @@ def plan_actions(
     taste: str,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> list[dict[str, Any]]:
-    """Ask the model for three actions. On a bad JSON payload, retry once."""
+    """Ask the model for three actions. A bad JSON payload is retried once.
+
+    Both calls share ``timeout`` seconds. The second call's request timeout is
+    whatever time is left. If less than a second remains, it is not sent.
+    """
     messages = build_messages(idea, taste)
+    deadline = time.monotonic() + timeout
     error: PlanParseError | None = None
-    for _attempt in range(2):
-        content = complete(client, model, messages, reasoning_effort, timeout)
+    for attempt in range(2):
+        remaining = deadline - time.monotonic()
+        if attempt > 0 and remaining < MIN_RETRY_SECONDS:
+            raise PlanTimeout("not enough time left to retry")
+        if remaining <= 0:
+            raise PlanTimeout("model budget exhausted")
+        content = complete(client, model, messages, reasoning_effort, remaining)
         try:
             return parse_actions(content)
         except PlanParseError as exc:

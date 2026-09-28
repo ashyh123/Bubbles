@@ -6,7 +6,10 @@ No function in this module runs a shell command. Model text is data.
 from __future__ import annotations
 
 import ipaddress
+import os
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -18,11 +21,38 @@ _SEARCH_HOST = "search.bilibili.com"
 _SEARCH_PATH = "/all"
 
 
+_log_override: Path | None = None
+
+
+def log_file_path() -> Path:
+    """Log next to taste.md, unless BUBBLE_LOG_PATH or an active override says otherwise."""
+    if _log_override is not None:
+        return _log_override
+    override = os.environ.get("BUBBLE_LOG_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    taste_raw = os.environ.get("BUBBLE_TASTE_PATH", "").strip()
+    if taste_raw:
+        return Path(taste_raw).expanduser().parent / "log"
+    return Path.home() / ".bubble" / "log"
+
+
+@contextmanager
+def use_log_path(path: Path) -> Iterator[None]:
+    global _log_override
+    previous = _log_override
+    _log_override = path
+    try:
+        yield
+    finally:
+        _log_override = previous
+
+
 def log_discard(message: str) -> None:
-    """Record a dropped action. Prefer ~/.bubble/log; fall back to stderr."""
+    """Record a dropped action. Prefer the configured log file; fall back to stderr."""
     stamped = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     line = f"{stamped} {message}\n"
-    path = Path.home() / ".bubble" / "log"
+    path = log_file_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
