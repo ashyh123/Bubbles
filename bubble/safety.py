@@ -59,10 +59,14 @@ def is_safe_https_url(url: str) -> bool:
     return bool(host) and not is_ip_host(host)
 
 
-def build_video_search_url(keyword: str) -> str:
+def build_bilibili_url(keyword: str) -> str:
     """Build the only video URL Bubble will open. The model's URL is never used."""
-    query = urlencode({"keyword": keyword})
+    query = urlencode({"keyword": keyword.strip()})
     return f"https://{_SEARCH_HOST}{_SEARCH_PATH}?{query}"
+
+
+def build_video_search_url(keyword: str) -> str:
+    return build_bilibili_url(keyword)
 
 
 def is_official_video_search(url: str) -> bool:

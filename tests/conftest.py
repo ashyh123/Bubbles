@@ -10,6 +10,7 @@ def isolated_env(monkeypatch, tmp_path):
     monkeypatch.setenv("USERPROFILE", str(home))
     for key in (
         "BUBBLE_API_KEY",
+        "DEEPSEEK_API_KEY",
         "BUBBLE_BASE_URL",
         "BUBBLE_MODEL",
         "BUBBLE_REASONING_EFFORT",

@@ -10,11 +10,14 @@ from typing import Any
 import httpx
 from openai import OpenAIError
 
-from bubble.actions import Action, dropped_line, menu_lines, perform, prepare_actions
+from bubble.actions import Action, dropped_line, execute, menu_lines, prepare_actions
 from bubble.config import Config
 from bubble.planner import PlanParseError, plan_actions
 from bubble.safety import probe_url
 from bubble.taste import TasteError, read_taste, remember
+
+NO_ACTIONS = "这次没拆出能用的动作，换个说法再试一次？"
+MISSING_KEY = "缺少 DEEPSEEK_API_KEY，请参考 .env.example 配置"
 
 USAGE = """\
 用法：
@@ -22,11 +25,11 @@ USAGE = """\
   bubble remember "一句偏好"
 
 配置从环境变量读取（见 .env.example）：
-  BUBBLE_API_KEY            必填
-  BUBBLE_BASE_URL           默认 https://api.deepseek.com
-  BUBBLE_MODEL              必填
-  BUBBLE_REASONING_EFFORT   默认 low，模型不支持时会去掉后重试
-  BUBBLE_TASTE_PATH         默认 ~/.bubble/taste.md
+  BUBBLE_API_KEY 或 DEEPSEEK_API_KEY   必填
+  BUBBLE_BASE_URL                      默认 https://api.deepseek.com
+  BUBBLE_MODEL                         必填
+  BUBBLE_REASONING_EFFORT              默认 low，模型不支持时会去掉后重试
+  BUBBLE_TASTE_PATH                    默认 ~/.bubble/taste.md
 """
 
 
@@ -58,10 +61,12 @@ def _confirmed(answer: str) -> bool:
     return answer.strip().lower() in {"", "y", "yes"}
 
 
-def _open_browser(url: str) -> None:
+def _open_browser(url: str) -> bool:
     opened = webbrowser.open(url)
     if opened is False:
         print("无法打开浏览器。", file=sys.stderr)
+        return False
+    return True
 
 
 def run_session(
@@ -81,6 +86,8 @@ def run_session(
     if opener is None:
         opener = _open_browser
     print_fn("正在拆分…")
+    if print_fn is print:
+        sys.stdout.flush()
     taste = read_taste(config.taste_path)
     try:
         raw_actions = plan_actions(
@@ -90,31 +97,31 @@ def run_session(
             idea=idea,
             taste=taste,
         )
-    except PlanParseError:
-        print("模型输出无法解析，请再试一次。", file=sys.stderr)
-        return 1
-    except (OpenAIError, httpx.HTTPError) as exc:
-        print(f"调用模型失败：{exc}", file=sys.stderr)
+    except (PlanParseError, OpenAIError, httpx.HTTPError):
+        print_fn(NO_ACTIONS)
         return 1
 
     actions, dropped = prepare_actions(raw_actions, probe)
+    print_fn("")
     for line in menu_lines(actions):
         print_fn(line)
     if dropped:
         print_fn(dropped_line(dropped))
     if not actions:
-        print_fn("没有可执行的动作。")
-        return 0
+        print_fn(NO_ACTIONS)
+        return 1
+    print_fn("")
 
     while True:
-        choice = input_fn("选一条（回车退出）：")
+        choice = input_fn(f"选一条 [1-{len(actions)}]，回车退出 › ")
         if choice.strip() == "":
             return 0
         index = _parse_choice(choice, len(actions))
         if index is None:
-            print_fn("请输入序号，或直接回车退出。")
+            print_fn(f"请输入 1-{len(actions)}")
             continue
-        _confirm_and_run(actions[index], input_fn=input_fn, print_fn=print_fn, opener=opener)
+        if _confirm_and_run(actions[index], input_fn=input_fn, print_fn=print_fn, opener=opener):
+            return 0
 
 
 def _confirm_and_run(
@@ -122,17 +129,22 @@ def _confirm_and_run(
     *,
     input_fn: Callable[[str], str],
     print_fn: Callable[..., None],
-    opener: Callable[[str], None],
-) -> None:
-    if action.type in {"open_url", "video_search"}:
-        print_fn(action.url)
-        answer = input_fn("确认？[Y/n] ")
+    opener: Callable[[str], object],
+) -> bool:
+    """Return True when a page was opened and the session should end."""
+    if action.kind in {"open_url", "video_search"}:
+        answer = input_fn(f"将打开 {action.url}  确认？[Y/n] › ")
         if not _confirmed(answer):
-            return
-        perform(action, opener=opener, writer=print_fn)
-        return
-    if action.type == "brief":
-        perform(action, opener=opener, writer=print_fn)
+            return False
+        opened = execute(action, opener, True)
+        if opened is False:
+            return False
+        print_fn("已打开。")
+        return True
+    if action.kind == "brief":
+        print_fn(action.text)
+        return False
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -148,11 +160,11 @@ def main(argv: list[str] | None = None) -> int:
             print(USAGE, end="", file=sys.stderr)
             return 2
         try:
-            line = remember(config.taste_path, text)
+            remember(config.taste_path, text)
         except TasteError:
             print("没有可记住的文字。", file=sys.stderr)
             return 2
-        print(f"已记下：{line}")
+        print(f"记住了：{' '.join(text.split())} （写入 taste.md）")
         return 0
 
     idea = " ".join(argv).strip()
@@ -160,10 +172,10 @@ def main(argv: list[str] | None = None) -> int:
         print(USAGE, end="", file=sys.stderr)
         return 2
     if not config.api_key:
-        print("缺少环境变量 BUBBLE_API_KEY。参见 .env.example。", file=sys.stderr)
+        print(MISSING_KEY)
         return 2
     if not config.model:
-        print("缺少环境变量 BUBBLE_MODEL。参见 .env.example。", file=sys.stderr)
+        print("缺少 BUBBLE_MODEL，请参考 .env.example 配置")
         return 2
 
     client = make_client(config)

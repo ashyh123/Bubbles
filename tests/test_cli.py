@@ -1,6 +1,6 @@
 import json
 
-from bubble.actions import dropped_line, menu_lines
+from bubble.actions import Action, display_width, dropped_line, menu_lines
 from bubble.cli import main, run_session
 from bubble.config import Config
 from bubble.safety import build_video_search_url
@@ -43,16 +43,31 @@ def _config(tmp_path, taste="CS61B 用 sp21 版\n"):
     )
 
 
+def test_long_title_is_clipped_to_eighty_columns():
+    action = Action(
+        kind="open_url",
+        text="页面",
+        title="课程站点 · " + ("很长的页面标题" * 20),
+        url="https://example.com/p",
+        uses_taste=True,
+    )
+    line = menu_lines([action])[0]
+    assert display_width(line) <= 80
+    assert line.endswith("  推荐先做 · 按你的 taste")
+    assert "…" in line
+
+
 def test_menu_marks_first_item_and_taste():
     from bubble.actions import prepare_actions
 
     actions, dropped = prepare_actions(PLAN["actions"], probe=lambda _url: True)
     lines = menu_lines(actions)
     assert dropped == 0
-    assert lines[0] == "① 打开说明页 （推荐先做 · 按你的 taste）"
+    assert lines[0] == "① 打开说明页  推荐先做 · 按你的 taste"
     assert lines[1] == "② B站搜索「CS61B Project 1」"
     assert "按你的 taste" not in lines[1]
-    assert lines[2] == "③ 作业简介"
+    assert lines[2] == "③ 看一份 200 字的作业简介"
+    assert all(display_width(line) <= 80 for line in lines)
     assert actions[1].url == build_video_search_url("CS61B Project 1")
 
 
@@ -78,13 +93,14 @@ def test_session_lists_actions_and_asks_before_opening(tmp_path):
     )
     assert code == 0
     assert printed[0] == "正在拆分…"
-    assert printed[1:] == [
-        "① 打开说明页 （推荐先做 · 按你的 taste）",
-        "② B站搜索「CS61B Project 1」",
-        "③ 作业简介",
-        "https://example.com/proj1",
+    assert "① 打开说明页  推荐先做 · 按你的 taste" in printed
+    assert "② B站搜索「CS61B Project 1」" in printed
+    assert "③ 看一份 200 字的作业简介" in printed
+    assert printed[-1] == "已打开。"
+    assert prompts == [
+        "选一条 [1-3]，回车退出 › ",
+        "将打开 https://example.com/proj1  确认？[Y/n] › ",
     ]
-    assert prompts == ["选一条（回车退出）：", "确认？[Y/n] ", "选一条（回车退出）："]
     assert opened == ["https://example.com/proj1"]
     assert "bilibili.com.evil.com" not in "\n".join(printed)
 
@@ -107,25 +123,31 @@ def test_declining_confirmation_does_not_open(tmp_path):
 def test_video_search_confirmation_prints_program_url_not_model_url(tmp_path):
     opened = []
     printed = []
-    answers = iter(["2", "y", ""])
+    prompts = []
+    answers = iter(["2", "y"])
 
     def probe(url: str) -> bool:
         if "bilibili" in url or "evil.com" in url:
             raise AssertionError(url)
         return True
 
+    def fake_input(prompt=""):
+        prompts.append(prompt)
+        return next(answers)
+
     run_session(
         "完成 CS61B Project 1",
         config=_config(tmp_path),
         client=FakeClient([json.dumps(PLAN, ensure_ascii=False)]),
         probe=probe,
-        input_fn=lambda _prompt="": next(answers),
+        input_fn=fake_input,
         print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
         opener=opened.append,
     )
     expected = build_video_search_url("CS61B Project 1")
-    assert expected in printed
+    assert prompts[-1] == f"将打开 {expected}  确认？[Y/n] › "
     assert opened == [expected]
+    assert "已打开。" in printed
     assert all("evil.com" not in line for line in printed)
 
 
@@ -147,8 +169,8 @@ def test_brief_prints_text_without_url_confirmation(tmp_path):
         print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
         opener=lambda _url: (_ for _ in ()).throw(AssertionError("browser opened")),
     )
-    assert "确认？[Y/n] " not in prompts
-    assert prompts[0] == "选一条（回车退出）："
+    assert all("确认？[Y/n]" not in prompt for prompt in prompts)
+    assert prompts[0] == "选一条 [1-3]，回车退出 › "
     assert printed[-1] == PLAN["actions"][2]["text"]
 
 
@@ -207,8 +229,9 @@ def test_dead_links_are_hidden_and_counted(tmp_path):
     assert "file:///etc/passwd" not in text
     assert "https://example.com/missing" not in text
     assert "打不开的官网" not in text
-    assert printed[1] == "① 还能看的简介 （推荐先做 · 按你的 taste）"
+    assert "① 看一份 200 字的还能看的简介  推荐先做 · 按你的 taste" in printed
     assert dropped_line(2) in printed
+    assert "file:///etc/passwd" not in text
 
 
 def test_probe_happens_before_the_menu_is_shown(tmp_path):
@@ -244,7 +267,7 @@ def test_probe_happens_before_the_menu_is_shown(tmp_path):
     )
     assert events[0] == ("print", "正在拆分…")
     assert events.index("llm") < events.index("probe")
-    menu_at = events.index(("print", "① 打开说明页 （推荐先做 · 按你的 taste）"))
+    menu_at = events.index(("print", "① 打开说明页  推荐先做 · 按你的 taste"))
     assert events.index("probe") < menu_at
     sent = client.chat.completions.calls[0]["messages"][1]["content"]
     assert "CS61B 用 sp21 版" in sent
@@ -255,4 +278,53 @@ def test_main_remember_and_missing_key(monkeypatch, capsys):
     assert "bubble remember" in capsys.readouterr().out
     monkeypatch.setenv("BUBBLE_MODEL", "deepseek-chat")
     assert main(["做一个小演示"]) == 2
-    assert "BUBBLE_API_KEY" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "缺少 DEEPSEEK_API_KEY，请参考 .env.example 配置"
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
+
+
+def test_out_of_range_prompts_once_then_waits(tmp_path):
+    prompts = []
+    printed = []
+    answers = iter(["9", "0", ""])
+
+    def fake_input(prompt=""):
+        prompts.append(prompt)
+        return next(answers)
+
+    code = run_session(
+        "完成 CS61B Project 1",
+        config=_config(tmp_path),
+        client=FakeClient([json.dumps(PLAN, ensure_ascii=False)]),
+        probe=lambda _url: True,
+        input_fn=fake_input,
+        print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
+        opener=lambda _url: (_ for _ in ()).throw(AssertionError("opened")),
+    )
+    assert code == 0
+    assert printed.count("请输入 1-3") == 2
+
+
+def test_no_usable_action_exits_nonzero(tmp_path):
+    plan = {
+        "actions": [
+            {"type": "open_url", "title": "坏", "url": "file:///etc/passwd", "uses_taste": False},
+            {"type": "open_url", "title": "也坏", "url": "http://example.com", "uses_taste": False},
+            {"type": "shell", "title": "命令", "command": "rm -rf /", "uses_taste": False},
+        ]
+    }
+    printed = []
+    code = run_session(
+        "完成 CS61B Project 1",
+        config=_config(tmp_path),
+        client=FakeClient([json.dumps(plan, ensure_ascii=False)]),
+        probe=lambda _url: True,
+        input_fn=lambda _prompt="": (_ for _ in ()).throw(AssertionError("asked")),
+        print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
+        opener=lambda _url: (_ for _ in ()).throw(AssertionError("opened")),
+    )
+    assert code == 1
+    assert "这次没拆出能用的动作，换个说法再试一次？" in printed
+    assert "有 2 条链接打不开，已略过" in printed
+    assert "Traceback" not in "\n".join(printed)

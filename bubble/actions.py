@@ -1,75 +1,96 @@
 """Turn model JSON into actions Bubble is willing to show or run.
 
-Nothing here invokes a shell. Unknown types are dropped. A video_search URL
-supplied by the model is ignored; the program builds the Bilibili link itself.
+Nothing here runs a shell command. Unknown types are dropped. A video_search
+URL from the model is ignored; the program builds the Bilibili link itself.
 """
 
 from __future__ import annotations
 
+import json
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from bubble.safety import (
-    build_video_search_url,
+    build_bilibili_url,
     is_official_video_search,
     is_safe_https_url,
     log_discard,
 )
 
 CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
+MAX_ACTIONS = 3
+_ALLOWED = {"open_url", "video_search", "brief"}
 
 
 @dataclass(frozen=True)
 class Action:
-    type: str
-    title: str
-    uses_taste: bool
-    url: str = ""
+    kind: str
+    text: str
+    url: str | None = None
+    uses_taste: bool = False
     keyword: str = ""
-    text: str = ""
+    title: str = ""
+
+    @property
+    def type(self) -> str:
+        return self.kind
 
 
-def _title(item: dict, fallback: str) -> str:
-    title = item.get("title")
-    if isinstance(title, str) and title.strip():
-        return title.strip()
-    return fallback
+def _load_items(raw: str) -> list:
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    items = data.get("actions") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return []
+    return items
 
 
-def prepare_actions(
-    raw_actions: list[dict],
-    probe: Callable[[str], bool],
-) -> tuple[list[Action], int]:
-    """Validate actions before they are shown.
+def _kind_of(item: dict) -> str | None:
+    kind = item.get("kind", item.get("type"))
+    if isinstance(kind, str) and kind in _ALLOWED:
+        return kind
+    return None
 
-    ``probe`` is called only for a syntactically safe open_url. video_search
-    never calls it. The returned count is how many open_url links were dropped.
-    """
+
+def _text_and_title(item: dict) -> tuple[str, str]:
+    raw_text = item.get("text") if isinstance(item.get("text"), str) else ""
+    raw_title = item.get("title") if isinstance(item.get("title"), str) else ""
+    text = raw_text if raw_text else raw_title
+    title = raw_title if raw_title else raw_text
+    return text, title
+
+
+def _collect(items: list, check_url: Callable[[str], bool]) -> tuple[list[Action], int]:
     kept: list[Action] = []
-    dropped_links = 0
-    for item in raw_actions:
+    dropped = 0
+    for item in items:
+        if len(kept) == MAX_ACTIONS:
+            break
         if not isinstance(item, dict):
             log_discard("discard non-object action")
             continue
-        kind = item.get("type")
+        kind = _kind_of(item)
         uses_taste = item.get("uses_taste") is True
-        if kind == "open_url":
-            url = item.get("url")
-            if not isinstance(url, str) or not is_safe_https_url(url):
-                dropped_links += 1
-                log_discard(f"discard open_url unsafe: {url!r}")
-                continue
-            if not probe(url):
-                dropped_links += 1
-                log_discard(f"discard open_url unreachable: {url}")
+        text, title = _text_and_title(item)
+        if kind == "brief":
+            if not text.strip():
+                log_discard("discard brief without text")
                 continue
             kept.append(
-                Action(
-                    type="open_url",
-                    title=_title(item, "打开链接"),
-                    uses_taste=uses_taste,
-                    url=url,
-                )
+                Action(kind="brief", text=text.strip(), title=title.strip(), uses_taste=uses_taste)
             )
             continue
         if kind == "video_search":
@@ -78,36 +99,103 @@ def prepare_actions(
                 log_discard("discard video_search without keyword")
                 continue
             cleaned = keyword.strip()
-            url = build_video_search_url(cleaned)
+            url = build_bilibili_url(cleaned)
             if not is_official_video_search(url):
                 log_discard(f"discard video_search malformed: {url}")
                 continue
             kept.append(
                 Action(
-                    type="video_search",
-                    title=_title(item, f"B站搜索「{cleaned}」"),
-                    uses_taste=uses_taste,
+                    kind="video_search",
+                    text=text,
+                    title=title,
                     url=url,
                     keyword=cleaned,
+                    uses_taste=uses_taste,
                 )
             )
             continue
-        if kind == "brief":
-            text = item.get("text")
-            if not isinstance(text, str) or not text.strip():
-                log_discard("discard brief without text")
+        if kind == "open_url":
+            url = item.get("url")
+            if not isinstance(url, str) or not is_safe_https_url(url):
+                dropped += 1
+                log_discard(f"discard open_url unsafe: {url!r}")
+                continue
+            if not check_url(url):
+                dropped += 1
+                log_discard(f"discard open_url unreachable: {url}")
                 continue
             kept.append(
                 Action(
-                    type="brief",
-                    title=_title(item, "简介"),
+                    kind="open_url",
+                    text=text or title or "链接",
+                    title=title or text or "链接",
+                    url=url,
                     uses_taste=uses_taste,
-                    text=text.strip(),
                 )
             )
             continue
-        log_discard(f"discard unknown type: {kind!r}")
-    return kept, dropped_links
+        log_discard(f"discard unknown type: {item.get('kind', item.get('type'))!r}")
+    if dropped:
+        log_discard(dropped_line(dropped))
+    return kept, dropped
+
+
+def process(raw: str, check_url: Callable[[str], bool]) -> tuple[list[Action], int]:
+    """Parse model output. Malformed JSON yields no actions and does not raise."""
+    try:
+        items = _load_items(raw)
+    except (TypeError, ValueError):
+        return [], 0
+    return _collect(items, check_url)
+
+
+def prepare_actions(
+    raw_actions: list[dict],
+    probe: Callable[[str], bool],
+) -> tuple[list[Action], int]:
+    """Same filtering as ``process``, for an already parsed action list."""
+    return _collect(raw_actions, probe)
+
+
+def display_width(text: str) -> int:
+    width = 0
+    for char in text:
+        width += 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+    return width
+
+
+def _clip(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if display_width(text) <= width:
+        return text
+    ellipsis = "…"
+    limit = width - display_width(ellipsis)
+    if limit <= 0:
+        return ellipsis
+    kept: list[str] = []
+    used = 0
+    for char in text:
+        char_width = 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+        if used + char_width > limit:
+            break
+        kept.append(char)
+        used += char_width
+    return "".join(kept) + ellipsis
+
+
+def action_body(action: Action) -> str:
+    if action.kind == "open_url":
+        title = (action.title or action.text or "链接").strip()
+        if title.startswith("打开"):
+            return title
+        return f"打开 {title}"
+    if action.kind == "video_search":
+        keyword = (action.keyword or action.text or "视频").strip()
+        return f"B站搜索「{keyword}」"
+    topic = (action.title or action.text or "这个").strip()
+    topic = topic.removeprefix("看一份 200 字的").removesuffix("简介").strip() or "这个"
+    return f"看一份 200 字的{topic}简介"
 
 
 def menu_lines(actions: list[Action]) -> list[str]:
@@ -118,9 +206,12 @@ def menu_lines(actions: list[Action]) -> list[str]:
             tags.append("推荐先做")
         if action.uses_taste:
             tags.append("按你的 taste")
-        suffix = f" （{' · '.join(tags)}）" if tags else ""
+        suffix = f"  {' · '.join(tags)}" if tags else ""
         number = CIRCLED[index] if index < len(CIRCLED) else f"{index + 1}."
-        lines.append(f"{number} {action.title}{suffix}")
+        prefix = f"{number} "
+        room = 80 - display_width(prefix) - display_width(suffix)
+        body = _clip(action_body(action), room)
+        lines.append(prefix + body + suffix)
     return lines
 
 
@@ -128,13 +219,23 @@ def dropped_line(count: int) -> str:
     return f"有 {count} 条链接打不开，已略过"
 
 
+def execute(action: Action, open_browser: Callable[[str], object], confirm: bool = False) -> object:
+    """Run one action. ``open_browser`` is injected; brief text is printed, never executed."""
+    if action.kind == "brief":
+        print(action.text)
+        return None
+    if not confirm or not action.url:
+        return None
+    if action.kind == "open_url" and not is_safe_https_url(action.url):
+        return None
+    if action.kind == "video_search" and not is_official_video_search(action.url):
+        return None
+    return open_browser(action.url)
+
+
 def perform(action: Action, *, opener: Callable[[str], None], writer: Callable[[str], None]) -> None:
-    """Run one confirmed action. Only a validated URL is passed to ``opener``."""
-    if action.type == "brief":
+    """Test helper: brief goes to ``writer`` instead of stdout."""
+    if action.kind == "brief":
         writer(action.text)
         return
-    if action.type == "open_url" and is_safe_https_url(action.url):
-        opener(action.url)
-        return
-    if action.type == "video_search" and is_official_video_search(action.url):
-        opener(action.url)
+    execute(action, opener, True)

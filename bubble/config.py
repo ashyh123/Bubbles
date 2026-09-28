@@ -27,8 +27,10 @@ class Config:
             taste_path = Path(taste_raw).expanduser()
         else:
             taste_path = Path.home() / ".bubble" / "taste.md"
+        bubble_key = os.environ.get("BUBBLE_API_KEY", "").strip()
+        deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         return cls(
-            api_key=os.environ.get("BUBBLE_API_KEY", "").strip(),
+            api_key=bubble_key or deepseek_key,
             base_url=base_url,
             model=os.environ.get("BUBBLE_MODEL", "").strip(),
             reasoning_effort=effort,

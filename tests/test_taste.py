@@ -22,7 +22,7 @@ def test_remember_appends_a_dated_line(tmp_path):
     ]
 
 
-def test_cli_remember_appends_without_calling_a_model(tmp_path, monkeypatch):
+def test_cli_remember_appends_without_calling_a_model(tmp_path, monkeypatch, capsys):
     path = tmp_path / "nested" / "taste.md"
     path.parent.mkdir()
     path.write_text("已有一行\n", encoding="utf-8")
@@ -32,6 +32,7 @@ def test_cli_remember_appends_without_calling_a_model(tmp_path, monkeypatch):
         lambda _config: (_ for _ in ()).throw(AssertionError("model client was created")),
     )
     assert main(["remember", "记笔记用", "Obsidian"]) == 0
+    assert capsys.readouterr().out.strip() == "记住了：记笔记用 Obsidian （写入 taste.md）"
     lines = path.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "已有一行"
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2} 记笔记用 Obsidian", lines[1])
