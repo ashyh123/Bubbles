@@ -128,13 +128,33 @@ def test_homepage_label_uses_course_then_host():
 
 
 def test_brief_clips_to_two_hundred_characters():
-    assert clip_brief("开头。" + ("甲" * 300)) == "开头。"
+    early = "开头。" + ("甲" * 300)
+    assert clip_brief(early) == early[:200] + "…"
     windowed = ("甲" * 150) + "！" + ("乙" * 100)
     assert clip_brief(windowed) == ("甲" * 150) + "！"
-    assert len(clip_brief(windowed)) <= 200
+    assert len(clip_brief(windowed)) >= 150
     plain = "乙" * 250
     assert clip_brief(plain) == ("乙" * 200) + "…"
     assert clip_brief("短句。") == "短句。"
+
+
+def test_brief_breaks_on_semicolon_after_an_early_period():
+    fullwidth = "前言。" + ("甲" * 160) + "；" + ("乙" * 80)
+    assert clip_brief(fullwidth) == "前言。" + ("甲" * 160) + "；"
+    assert len(clip_brief(fullwidth)) >= 150
+    halfwidth = "前言。" + ("甲" * 160) + ";" + ("乙" * 80)
+    assert clip_brief(halfwidth).endswith(";")
+    assert "乙" not in clip_brief(halfwidth)
+    assert len(clip_brief(halfwidth)) >= 150
+
+
+def test_brief_hard_cuts_when_the_break_is_under_150():
+    early = "开头。" + ("甲" * 300)
+    assert clip_brief(early) == early[:200] + "…"
+    assert len(clip_brief(early)) == 201
+    short_semi = ("甲" * 40) + "；" + ("乙" * 300)
+    assert clip_brief(short_semi) == short_semi[:200] + "…"
+    assert not clip_brief(short_semi).endswith("；")
 
 
 def test_brief_menu_spaces_chinese_and_english():

@@ -145,6 +145,7 @@ def _run_session(
             timeout=config.timeout,
         )
     except KeyboardInterrupt:
+        print_fn("")
         return 130
     except (APITimeoutError, httpx.TimeoutException, PlanTimeout):
         print_fn(TIMEOUT_MESSAGE)
@@ -156,7 +157,11 @@ def _run_session(
         print_fn(NO_ACTIONS)
         return 1
 
-    actions, dropped = prepare_actions(raw_actions, probe)
+    try:
+        actions, dropped = prepare_actions(raw_actions, probe)
+    except KeyboardInterrupt:
+        print_fn("")
+        return 130
     print_fn("")
     for line in menu_lines(actions):
         print_fn(line)
@@ -180,8 +185,19 @@ def _run_session(
                 actions[index], input_fn=input_fn, print_fn=print_fn, opener=opener
             ):
                 return 0
+            if actions[index].kind == "brief":
+                _reprint_menu(actions, dropped, print_fn)
     except _Quit as stopped:
+        print_fn("")
         return stopped.code
+
+
+def _reprint_menu(actions: list[Action], dropped: int, print_fn: Callable[..., None]) -> None:
+    print_fn("")
+    for line in menu_lines(actions):
+        print_fn(line)
+    if dropped:
+        print_fn(dropped_line(dropped))
 
 
 def _confirm_and_run(

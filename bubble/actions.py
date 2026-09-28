@@ -23,8 +23,9 @@ from bubble.safety import (
 CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
 MAX_ACTIONS = 3
 BRIEF_LIMIT = 200
+BRIEF_MIN = 150
 _ALLOWED = {"open_url", "video_search", "brief"}
-_SENTENCE_END = "。！？"
+_SENTENCE_END = "。！？；;"
 
 
 @dataclass(frozen=True)
@@ -71,14 +72,20 @@ def _kind_of(item: dict) -> str | None:
 
 
 def clip_brief(text: str, limit: int = BRIEF_LIMIT) -> str:
-    """Keep a brief within ``limit`` characters, preferring a sentence boundary."""
+    """Keep a brief within ``limit`` characters, preferring a sentence boundary.
+
+    Breaks on 。！？； and ``;``. A break that leaves fewer than 150 characters
+    is discarded in favor of a hard cut at ``limit`` plus an ellipsis.
+    """
     body = text.strip()
     if len(body) <= limit:
         return body
     window = body[:limit]
     cut = max(window.rfind(mark) for mark in _SENTENCE_END)
     if cut >= 0:
-        return window[: cut + 1]
+        clipped = window[: cut + 1]
+        if len(clipped) >= BRIEF_MIN:
+            return clipped
     return window + "…"
 
 

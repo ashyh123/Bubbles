@@ -174,8 +174,19 @@ def test_brief_prints_text_without_url_confirmation(tmp_path):
         opener=lambda _url: (_ for _ in ()).throw(AssertionError("browser opened")),
     )
     assert all("确认？[Y/n]" not in prompt for prompt in prompts)
-    assert prompts[0] == "选一条 [1-3]，回车退出 › "
-    assert printed[-1] == PLAN["actions"][2]["text"]
+    assert prompts == [
+        "选一条 [1-3]，回车退出 › ",
+        "选一条 [1-3]，回车退出 › ",
+    ]
+    brief = PLAN["actions"][2]["text"]
+    spot = printed.index(brief)
+    assert printed[spot + 1] == ""
+    again = printed[spot + 2 :]
+    assert again[0].startswith("① ")
+    assert again[1].startswith("② ")
+    assert again[2].startswith("③ ")
+    first_menu = [line for line in printed[:spot] if line.startswith(("①", "②", "③"))]
+    assert again[:3] == first_menu
 
 
 def test_enter_exits(tmp_path):
@@ -193,6 +204,8 @@ def test_enter_exits(tmp_path):
     assert code == 0
     assert opened == []
     assert printed[0] == "正在拆分…（通常 5–15 秒）"
+    assert printed[-1] == ""
+    assert printed[-2].startswith(("①", "②", "③"))
 
 
 def test_dead_links_are_hidden_and_counted(tmp_path):
@@ -524,6 +537,8 @@ def test_eof_and_ctrl_c_at_prompts_exit_quietly(tmp_path):
         )
         assert code == expected
         assert opened == []
+        assert printed[-1] == ""
+        assert printed[-2] == ""
         assert "Traceback" not in "\n".join(printed)
         assert "已打开" not in "\n".join(printed)
 
@@ -540,5 +555,66 @@ def test_ctrl_c_while_waiting_prints_no_traceback(tmp_path):
         opener=lambda _url: (_ for _ in ()).throw(AssertionError("opened")),
     )
     assert code == 130
-    assert printed == [WAITING]
+    assert printed == [WAITING, ""]
     assert "Traceback" not in "\n".join(printed)
+
+
+def test_ctrl_c_during_probe_exits_130(tmp_path):
+    printed = []
+    opened = []
+
+    def probe(_url):
+        raise KeyboardInterrupt
+
+    code = run_session(
+        "完成 CS61B Project 1",
+        config=_config(tmp_path),
+        client=FakeClient([json.dumps(PLAN, ensure_ascii=False)]),
+        probe=probe,
+        input_fn=lambda _prompt="": (_ for _ in ()).throw(AssertionError("asked")),
+        print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
+        opener=opened.append,
+    )
+    assert code == 130
+    assert opened == []
+    assert printed == [WAITING, ""]
+    assert "Traceback" not in "\n".join(printed)
+    assert "①" not in "\n".join(printed)
+
+
+def test_brief_reprints_menu_and_skipped_line(tmp_path):
+    plan = {
+        "actions": [
+            {"type": "open_url", "title": "坏链接", "url": "file:///etc/passwd", "uses_taste": False},
+            {
+                "type": "open_url",
+                "title": "CS61B sp21 · 说明页",
+                "url": "https://sp21.datastructur.es/missing",
+                "uses_taste": True,
+            },
+            {"type": "brief", "title": "作业", "text": "简介正文", "uses_taste": True},
+        ]
+    }
+    printed = []
+    answers = iter(["2", ""])
+    home = "https://sp21.datastructur.es/"
+
+    code = run_session(
+        "准备复习",
+        config=_config(tmp_path),
+        client=FakeClient([json.dumps(plan, ensure_ascii=False)]),
+        probe=lambda url: url == home,
+        input_fn=lambda _prompt="": next(answers),
+        print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
+        opener=lambda _url: (_ for _ in ()).throw(AssertionError("opened")),
+    )
+    assert code == 0
+    first = "① 打开 CS61B sp21 · 首页  推荐先做 · 按你的 taste · 原页面打不开，已换成首页"
+    second = "② 看一份 200 字的作业简介"
+    skipped = "有 1 条链接打不开，已略过"
+    assert printed.count(first) == 2
+    assert printed.count(second) == 2
+    assert printed.count(skipped) == 2
+    assert "按你的 taste" not in second
+    spot = printed.index("简介正文")
+    assert printed[spot + 1 : spot + 5] == ["", first, second, skipped]
