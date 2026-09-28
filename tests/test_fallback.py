@@ -47,8 +47,10 @@ def test_unreachable_page_falls_back_to_homepage():
     assert calls == [DEEP, HOME]
     assert len(kept) == 1
     assert kept[0].url == HOME
+    assert kept[0].title == "首页"
     assert kept[0].fell_back is True
     line = menu_lines(kept)[0]
+    assert "打开 首页" in line
     assert "原页面打不开，已换成首页" in line
     assert "推荐先做" in line
     log = _log()

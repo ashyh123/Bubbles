@@ -141,8 +141,8 @@ def _collect(items: list, check_url: Callable[[str], bool]) -> tuple[list[Action
                 kept.append(
                     Action(
                         kind="open_url",
-                        text=text or title or "链接",
-                        title=title or text or "链接",
+                        text="首页",
+                        title="首页",
                         url=home,
                         uses_taste=uses_taste,
                         fell_back=True,

@@ -17,9 +17,9 @@ from bubble.safety import probe_url
 from bubble.taste import TasteError, read_taste, remember
 
 NO_ACTIONS = "这次没拆出能用的动作，换个说法再试一次？"
-MISSING_KEY = "缺少 DEEPSEEK_API_KEY，请参考 .env.example 配置"
+MISSING_KEY = "缺少 BUBBLE_API_KEY，请参考 .env.example 配置"
 WAITING = "正在拆分…（通常 10 秒内）"
-TIMEOUT_MESSAGE = "拆分超时了，请再试一次。"
+TIMEOUT_MESSAGE = "这次拆分太久了，请稍后再试一次"
 
 USAGE = """\
 用法：

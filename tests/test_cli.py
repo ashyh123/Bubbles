@@ -283,7 +283,7 @@ def test_main_remember_and_missing_key(monkeypatch, capsys):
     monkeypatch.setenv("BUBBLE_MODEL", "deepseek-chat")
     assert main(["做一个小演示"]) == 2
     captured = capsys.readouterr()
-    assert captured.out.strip() == "缺少 DEEPSEEK_API_KEY，请参考 .env.example 配置"
+    assert captured.out.strip() == "缺少 BUBBLE_API_KEY，请参考 .env.example 配置"
     assert "Traceback" not in captured.err
     assert "Traceback" not in captured.out
 
@@ -340,6 +340,49 @@ def _timeout_client(exc: BaseException):
             raise exc
 
     return SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+
+
+def test_fallback_confirms_the_homepage_url(tmp_path):
+    deep = "https://sp21.datastructur.es/materials/proj/proj1/proj1"
+    home = "https://sp21.datastructur.es/"
+    plan = {
+        "actions": [
+            {
+                "type": "open_url",
+                "title": "CS61B sp21 · Project 1 说明页",
+                "url": deep,
+                "uses_taste": True,
+            },
+            {"type": "brief", "title": "作业", "text": "简介正文", "uses_taste": False},
+            {"type": "brief", "title": "备选", "text": "另一段", "uses_taste": False},
+        ]
+    }
+    opened = []
+    prompts = []
+    printed = []
+    answers = iter(["1", ""])
+
+    def fake_input(prompt=""):
+        prompts.append(prompt)
+        return next(answers)
+
+    def probe(url):
+        return url == home
+
+    code = run_session(
+        "完成 CS61B Project 1",
+        config=_config(tmp_path),
+        client=FakeClient([json.dumps(plan, ensure_ascii=False)]),
+        probe=probe,
+        input_fn=fake_input,
+        print_fn=lambda *args, **_kwargs: printed.append(args[0] if args else ""),
+        opener=opened.append,
+    )
+    assert code == 0
+    assert "① 打开 首页  推荐先做 · 按你的 taste · 原页面打不开，已换成首页" in printed
+    assert deep not in "\n".join(printed)
+    assert prompts[1] == f"将打开 {home}  确认？[Y/n] › "
+    assert opened == [home]
 
 
 def test_llm_timeout_prints_one_chinese_sentence(tmp_path):

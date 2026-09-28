@@ -68,13 +68,58 @@ def test_02_good_https_kept():
 
 
 def test_03_unreachable_url_dropped_and_counted():
+    """原页面和首页都打不开：丢掉并计数；只允许请求原网址和同一站点的首页。"""
     rec = Recorder(ok=False)
     kept, dropped = process(out(
         {"kind": "open_url", "text": "官网", "url": GOOD},
         {"kind": "brief", "text": "简介"},
     ), rec)
     assert [a.kind for a in kept] == ["brief"]
-    assert dropped == 1 and rec.calls == [GOOD]
+    assert dropped == 1
+    assert rec.calls[0] == GOOD
+    assert all(urlsplit(u).hostname == "sp21.datastructur.es" for u in rec.calls)
+    assert len(rec.calls) <= 2
+
+
+# ---------- 退回首页（18:06 开发采纳的改动） ----------
+
+class HomeOnly(Recorder):
+    """深层页面 404，只有站点首页能打开。"""
+    def __call__(self, url):
+        self.calls.append(url)
+        p = urlsplit(url)
+        return p.path in ("", "/") and not p.query
+
+
+def test_13_deep_404_falls_back_to_same_site_home():
+    rec = HomeOnly()
+    kept, dropped = process(out({"kind": "open_url", "text": "官网",
+                                 "url": "https://sp21.datastructur.es/materials/lab/lab03/lab03"}), rec)
+    assert dropped == 0 and len(kept) == 1
+    p = urlsplit(kept[0].url)
+    assert (p.scheme, p.hostname, p.path.rstrip("/")) == ("https", "sp21.datastructur.es", "")
+    assert rec.calls[-1] == kept[0].url, "首页也必须先请求一次再保留"
+
+
+def test_14_fallback_never_changes_host_or_scheme():
+    """退回首页只能是同一主机的 https 首页，不能借机换到别的站点或协议。"""
+    rec = HomeOnly()
+    kept, _ = process(out({"kind": "open_url", "text": "官网",
+                           "url": "https://cs61a.org/lecture/lec03/?next=https://evil.example/"}), rec)
+    for a in kept:
+        p = urlsplit(a.url)
+        assert p.scheme == "https" and p.hostname == "cs61a.org"
+        assert "evil" not in a.url
+
+
+def test_15_bad_url_is_not_rescued_by_fallback():
+    """不合法的网址（http、用户名伪装）不能通过“退回首页”被救回来。"""
+    rec = HomeOnly()
+    kept, dropped = process(out(
+        {"kind": "open_url", "text": "a", "url": "http://sp21.datastructur.es/x"},
+        {"kind": "open_url", "text": "b", "url": "https://sp21.datastructur.es@evil.example/x"},
+    ), rec)
+    assert kept == [] and dropped == 2 and rec.calls == []
 
 
 # ---------- video_search：程序自己拼网址、不请求 B 站 ----------
