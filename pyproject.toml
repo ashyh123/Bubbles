@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bubble"
+version = "0.0.1"
+description = "Turn a learning idea into three actions you can start right away."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "httpx>=0.27",
+  "openai>=1.40",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+bubble = "bubble.cli:console_main"
+
+[tool.setuptools.packages.find]
+include = ["bubble*"]
+
+[tool.setuptools.package-data]
+bubble = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+# Kept byte-for-byte with the safety suite; do not reformat its assertions.
+"tests/safety/test_safety.py" = ["I001"]
